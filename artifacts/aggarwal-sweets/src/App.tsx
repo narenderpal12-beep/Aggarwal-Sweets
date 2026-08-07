@@ -74,11 +74,16 @@ function AppShell() {
 
   return (
     <div className="min-h-[100dvh] overflow-x-hidden">
-      <div className="bg-primary text-primary-foreground">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-2 text-[11px] font-medium tracking-[.16em] uppercase sm:px-8">
-          <span className="flex items-center gap-2"><MapPin className="size-3.5 text-accent" /> Freshly packed in Sirsa</span>
-          <span className="hidden sm:block">Free local delivery over ₹799 · COD available</span>
-          <Link href="/admin" className="flex items-center gap-1.5 text-accent hover:underline" data-testid="link-admin-top"><LayoutDashboard className="size-3.5" /> Owner portal</Link>
+      <div className="promo-marquee border-b border-primary-foreground/10 bg-primary text-primary-foreground" aria-label="Store promotions">
+        <div className="marquee-window">
+          <div className="marquee-track promo-track">
+            {[0, 1].map(copy => <div className="flex items-center" key={copy} aria-hidden={copy === 1}>
+              <span>Fresh batches packed daily in Sirsa</span><i />
+              <span>Free local delivery over ₹799</span><i />
+              <span>COD available across Sirsa</span><i />
+              <span>Order before 4 PM for next-day delivery</span><i />
+            </div>)}
+          </div>
         </div>
       </div>
       <header className="sticky top-0 z-30 border-b border-border/70 bg-background/95 backdrop-blur-xl">
@@ -90,10 +95,12 @@ function AppShell() {
               <div><div className="font-display text-xl font-bold leading-none tracking-tight">Aggarwal</div><div className="font-mono-ui mt-1 text-[9px] uppercase tracking-[.3em] text-secondary">Sweets · Sirsa</div></div>
             </div>
           </Link>
-          <nav className={`${menuOpen ? 'absolute left-0 top-full flex w-full flex-col border-b bg-background p-5 shadow-lg' : 'hidden'} gap-6 text-sm font-semibold md:static md:flex md:flex-row md:border-0 md:bg-transparent md:p-0 md:shadow-none`} aria-label="Main navigation">
+          <nav className={`${menuOpen ? 'absolute left-0 top-full flex w-full flex-col border-b bg-background p-5 shadow-lg' : 'hidden'} gap-5 text-sm font-semibold md:static md:flex md:flex-row md:items-center md:border-0 md:bg-transparent md:p-0 md:shadow-none`} aria-label="Main navigation">
             <a href="#shop" onClick={() => setMenuOpen(false)} data-testid="link-shop">Shop all</a>
+            <a href="#shop" onClick={() => setMenuOpen(false)} data-testid="link-sweets">Sweets</a>
+            <a href="#shop" onClick={() => setMenuOpen(false)} data-testid="link-namkeen">Namkeen</a>
+            <a href="#gifting" onClick={() => setMenuOpen(false)} data-testid="link-gifting">Gifting</a>
             <a href="#story" onClick={() => setMenuOpen(false)} data-testid="link-story">Our story</a>
-            <a href="#gifting" onClick={() => setMenuOpen(false)} data-testid="link-gifting">Gift guide</a>
             <a href="#visit" onClick={() => setMenuOpen(false)} data-testid="link-visit">Visit us</a>
           </nav>
           <div className="ml-auto flex items-center gap-2">
@@ -102,6 +109,19 @@ function AppShell() {
           </div>
         </div>
       </header>
+      <div className="benefit-marquee border-b border-primary-foreground/10 bg-secondary text-secondary-foreground" aria-label="Aggarwal Sweets service promises">
+        <div className="marquee-window">
+          <div className="marquee-track benefit-track">
+            {[0, 1].map(copy => <div className="flex items-center" key={copy} aria-hidden={copy === 1}>
+              <span><PackageCheck /> Freshly prepared</span><i />
+              <span><ShieldCheck /> Lab-tested ingredients</span><i />
+              <span><Truck /> On-time local delivery</span><i />
+              <span><BadgeCheck /> Easy returns on unopened boxes</span><i />
+              <span><Heart /> Made with care in Sirsa</span><i />
+            </div>)}
+          </div>
+        </div>
+      </div>
 
       <main>
         <Hero onShop={() => document.getElementById('shop')?.scrollIntoView({ behavior: 'smooth' })} />
@@ -121,21 +141,82 @@ function AppShell() {
   );
 }
 
+const heroSlides = [
+  {
+    id: 'mithai',
+    eyebrow: 'Fresh from the counter · Since 1978',
+    heading: 'A little',
+    highlight: 'mithaas',
+    ending: 'goes a long way.',
+    description: 'Family recipes, fresh batches, and boxes made to be opened with a smile. Bringing Sirsa’s favourite sweets to your doorstep.',
+    image: '/hero-mithai.jpg',
+    badge: ['Small', 'batch', 'joy'],
+    cta: 'Shop the mithai',
+    secondary: 'Find a gift',
+  },
+  {
+    id: 'ladoo',
+    eyebrow: 'Festive favourite · Made today',
+    heading: 'Bring home',
+    highlight: 'the celebration.',
+    ending: '',
+    description: 'Golden motichoor ladoos, made in small batches and rolled while they are still warm. The sweetest way to mark a special day.',
+    image: '/ladoo-plate.jpg',
+    badge: ['Made', 'fresh', 'today'],
+    cta: 'See bestsellers',
+    secondary: 'Gift a box',
+  },
+  {
+    id: 'namkeen',
+    eyebrow: 'For chai-time cravings · Sirsa',
+    heading: 'Crunchy little',
+    highlight: 'reasons to stay.',
+    ending: '',
+    description: 'From aloo bhujia to ajwain mathri, our savoury counter is full of old recipes, bright spices, and one-more-handful energy.',
+    image: '/namkeen-bowl.jpg',
+    badge: ['Tea-time', 'hero'],
+    cta: 'Shop namkeen',
+    secondary: 'Our story',
+  },
+] as const;
+
 function Hero({ onShop }: { onShop: () => void }) {
+  const [activeSlide, setActiveSlide] = useState(0);
+  const slide = heroSlides[activeSlide];
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setActiveSlide(current => (current + 1) % heroSlides.length), 6500);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const moveSlide = (direction: number) => {
+    setActiveSlide(current => (current + direction + heroSlides.length) % heroSlides.length);
+  };
+
   return <section className="relative isolate overflow-hidden bg-primary text-primary-foreground">
     <div className="absolute -right-36 -top-36 size-[460px] rounded-full border border-accent/20" /><div className="absolute -right-20 -top-20 size-[300px] rounded-full border border-accent/20" />
     <div className="mx-auto grid max-w-7xl items-center gap-10 px-5 py-12 sm:px-8 sm:py-20 lg:grid-cols-[1.02fr_.98fr] lg:py-24">
-      <div className="relative z-10 animate-reveal">
-        <div className="mb-5 flex items-center gap-3 font-mono-ui text-[10px] uppercase tracking-[.28em] text-accent"><span className="h-px w-8 bg-accent" /> Since 1978 · Sirsa</div>
-        <h1 className="max-w-xl font-display text-5xl font-semibold leading-[.98] tracking-[-.04em] sm:text-7xl">A little <em className="font-normal text-accent">mithaas</em><br />goes a long way.</h1>
-        <p className="mt-6 max-w-md text-[15px] leading-7 text-primary-foreground/75">Family recipes, fresh batches, and boxes made to be opened with a smile. Bringing Sirsa’s favourite sweets to your doorstep.</p>
-        <div className="mt-8 flex flex-wrap items-center gap-3"><button onClick={onShop} className="group inline-flex items-center gap-3 rounded-full bg-accent px-6 py-3.5 text-sm font-bold text-accent-foreground transition-transform hover:-translate-y-0.5" data-testid="button-shop-mithai">Shop the mithai <ArrowRight className="size-4 transition-transform group-hover:translate-x-1" /></button><a href="#gifting" className="inline-flex items-center gap-2 rounded-full border border-primary-foreground/25 px-5 py-3 text-sm font-semibold hover:bg-primary-foreground/10" data-testid="link-gift-guide">Find a gift <Gift className="size-4 text-accent" /></a></div>
+      <div className="relative z-10 animate-reveal" key={slide.id}>
+        <div className="mb-5 flex items-center gap-3 font-mono-ui text-[10px] uppercase tracking-[.28em] text-accent"><span className="h-px w-8 bg-accent" /> {slide.eyebrow}</div>
+        <h1 className="max-w-xl font-display text-5xl font-semibold leading-[.98] tracking-[-.04em] sm:text-7xl">{slide.heading} <em className="font-normal text-accent">{slide.highlight}</em>{slide.ending && <><br />{slide.ending}</>}</h1>
+        <p className="mt-6 max-w-md text-[15px] leading-7 text-primary-foreground/75">{slide.description}</p>
+        <div className="mt-8 flex flex-wrap items-center gap-3"><button onClick={onShop} className="group inline-flex items-center gap-3 rounded-full bg-accent px-6 py-3.5 text-sm font-bold text-accent-foreground transition-transform hover:-translate-y-0.5" data-testid="button-shop-mithai">{slide.cta} <ArrowRight className="size-4 transition-transform group-hover:translate-x-1" /></button><a href={slide.id === 'namkeen' ? '#story' : '#gifting'} className="inline-flex items-center gap-2 rounded-full border border-primary-foreground/25 px-5 py-3 text-sm font-semibold hover:bg-primary-foreground/10" data-testid="link-gift-guide">{slide.secondary} <Gift className="size-4 text-accent" /></a></div>
         <div className="mt-12 flex items-center gap-7 text-xs text-primary-foreground/60"><span className="flex items-center gap-2"><ShieldCheck className="size-4 text-accent" /> Hygienically packed</span><span className="flex items-center gap-2"><Truck className="size-4 text-accent" /> Local delivery</span></div>
       </div>
-      <div className="relative min-h-[320px] animate-reveal delay-2 sm:min-h-[470px]">
-        <div className="absolute inset-5 rotate-3 rounded-[3rem] bg-accent/20 sm:inset-10" /><div className="absolute inset-2 -rotate-2 overflow-hidden rounded-[3rem] border border-accent/30 shadow-2xl sm:inset-5"><img src="/hero-mithai.jpg" alt="A festive box of assorted sweets" className="h-full w-full object-cover" /></div>
+      <div className="relative min-h-[320px] animate-reveal delay-2 sm:min-h-[470px]" key={`${slide.id}-image`}>
+        <div className="absolute inset-5 rotate-3 rounded-[3rem] bg-accent/20 sm:inset-10" /><div className="absolute inset-2 -rotate-2 overflow-hidden rounded-[3rem] border border-accent/30 shadow-2xl sm:inset-5"><img src={slide.image} alt="Aggarwal Sweets festive selection" className="h-full w-full object-cover transition-opacity duration-500" /></div>
         <div className="animate-drift absolute -bottom-1 left-0 rounded-2xl bg-card px-4 py-3 text-card-foreground shadow-xl sm:bottom-6 sm:left-4"><div className="flex items-center gap-1 text-accent"><Star className="size-3.5 fill-current" /><Star className="size-3.5 fill-current" /><Star className="size-3.5 fill-current" /><Star className="size-3.5 fill-current" /><Star className="size-3.5 fill-current" /></div><div className="mt-1 font-mono-ui text-[10px] uppercase tracking-wider">Loved across Sirsa</div></div>
-        <div className="absolute right-0 top-5 grid size-20 place-items-center rounded-full border border-accent bg-secondary text-center text-[10px] font-bold uppercase leading-tight text-secondary-foreground shadow-lg sm:right-8 sm:top-10">Small<br />batch<br />joy</div>
+        <div className="absolute right-0 top-5 grid size-20 place-items-center rounded-full border border-accent bg-secondary text-center text-[10px] font-bold uppercase leading-tight text-secondary-foreground shadow-lg sm:right-8 sm:top-10">{slide.badge.map(line => <span key={line}>{line}</span>)}</div>
+      </div>
+    </div>
+    <div className="relative z-10 mx-auto flex max-w-7xl items-center justify-between gap-5 px-5 pb-8 sm:px-8 sm:pb-10">
+      <div className="flex items-center gap-2" aria-label="Choose hero slide">
+        {heroSlides.map((item, index) => <button key={item.id} onClick={() => setActiveSlide(index)} className={`hero-dot ${activeSlide === index ? 'is-active' : ''}`} aria-label={`Show slide ${index + 1}: ${item.id}`} aria-current={activeSlide === index ? 'true' : undefined} data-testid={`button-hero-slide-${index + 1}`} />)}
+      </div>
+      <div className="flex items-center gap-2">
+        <span className="mr-2 font-mono-ui text-[10px] tracking-[.2em] text-primary-foreground/60">{String(activeSlide + 1).padStart(2, '0')} / {String(heroSlides.length).padStart(2, '0')}</span>
+        <button onClick={() => moveSlide(-1)} className="grid size-9 place-items-center rounded-full border border-primary-foreground/25 transition-colors hover:border-accent hover:text-accent" aria-label="Previous hero slide" data-testid="button-hero-previous"><ChevronLeft className="size-4" /></button>
+        <button onClick={() => moveSlide(1)} className="grid size-9 place-items-center rounded-full border border-primary-foreground/25 transition-colors hover:border-accent hover:text-accent" aria-label="Next hero slide" data-testid="button-hero-next"><ChevronRight className="size-4" /></button>
       </div>
     </div>
     <div className="absolute bottom-0 left-0 h-2 w-full bg-accent" />

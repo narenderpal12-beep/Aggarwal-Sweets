@@ -288,6 +288,94 @@
 .delay-3 { animation-delay: .3s; }
 .delay-4 { animation-delay: .4s; }
 
+.marquee-window {
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.marquee-track {
+  display: flex;
+  width: max-content;
+  min-width: 200%;
+  animation: marquee 30s linear infinite;
+}
+
+.marquee-track > div {
+  display: flex;
+  align-items: center;
+  min-width: 50%;
+  justify-content: space-around;
+}
+
+.promo-marquee {
+  min-height: 30px;
+}
+
+.promo-track {
+  font-family: var(--app-font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.promo-track span {
+  padding: 7px 24px;
+}
+
+.promo-track i,
+.benefit-track i {
+  display: block;
+  width: 4px;
+  height: 4px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: hsl(var(--accent));
+}
+
+.benefit-marquee {
+  min-height: 44px;
+}
+
+.benefit-track {
+  animation-duration: 36s;
+}
+
+.benefit-track span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 28px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.benefit-track svg {
+  width: 15px;
+  height: 15px;
+  color: hsl(var(--accent));
+}
+
+.hero-dot {
+  width: 9px;
+  height: 9px;
+  border: 1px solid hsl(var(--primary-foreground) / .55);
+  border-radius: 999px;
+  transition: all .25s ease;
+}
+
+.hero-dot:hover,
+.hero-dot.is-active {
+  width: 28px;
+  border-color: hsl(var(--accent));
+  background: hsl(var(--accent));
+}
+
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
 }
