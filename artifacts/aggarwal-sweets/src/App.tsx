@@ -475,10 +475,10 @@ function Header({
           <Link href="/blog" className="rounded-lg px-4 py-2.5 transition-colors hover:bg-muted" data-testid="nav-blog" onClick={() => setShopOpen(false)}>
             Blog
           </Link>
-          <a href="/#story" className="rounded-lg px-4 py-2.5 transition-colors hover:bg-muted" data-testid="nav-story" onClick={() => setShopOpen(false)}>
+          <a href={`${import.meta.env.BASE_URL}#story`} className="rounded-lg px-4 py-2.5 transition-colors hover:bg-muted" data-testid="nav-story" onClick={() => setShopOpen(false)}>
             Our Story
           </a>
-          <a href="/#visit" className="rounded-lg px-4 py-2.5 transition-colors hover:bg-muted" data-testid="nav-contact" onClick={() => setShopOpen(false)}>
+          <a href={`${import.meta.env.BASE_URL}#visit`} className="rounded-lg px-4 py-2.5 transition-colors hover:bg-muted" data-testid="nav-contact" onClick={() => setShopOpen(false)}>
             Contact
           </a>
         </nav>
@@ -513,8 +513,8 @@ function Header({
               )}
               <Link href="/shop/gifting" className="block py-2.5 text-sm font-semibold" onClick={() => setMenuOpen(false)}>Gifting</Link>
               <Link href="/blog" className="block py-2.5 text-sm font-semibold" onClick={() => setMenuOpen(false)}>Blog</Link>
-              <a href="/#story" className="block py-2.5 text-sm font-semibold" onClick={() => setMenuOpen(false)}>Our Story</a>
-              <a href="/#visit" className="block py-2.5 text-sm font-semibold" onClick={() => setMenuOpen(false)}>Contact</a>
+              <a href={`${import.meta.env.BASE_URL}#story`} className="block py-2.5 text-sm font-semibold" onClick={() => setMenuOpen(false)}>Our Story</a>
+              <a href={`${import.meta.env.BASE_URL}#visit`} className="block py-2.5 text-sm font-semibold" onClick={() => setMenuOpen(false)}>Contact</a>
             </div>
           </div>
         )}

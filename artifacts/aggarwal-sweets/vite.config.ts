@@ -29,6 +29,7 @@ if (!basePath) {
 
 export default defineConfig({
   base: basePath,
+  appType: 'spa',
   plugins: [
     react(),
     tailwindcss(),
