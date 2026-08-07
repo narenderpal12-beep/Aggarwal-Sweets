@@ -8,7 +8,8 @@ import {
   ChevronRight as ChevronRightSmall, Clock3, Gift, Heart, Instagram, Menu, Minus,
   PackageCheck, Phone, Plus, Search, ShoppingBag, Sparkles, Star, Store, Truck,
   UserRound, X, ShieldCheck, SlidersHorizontal, LayoutDashboard, Mail, MapPin,
-  Trash2, Wheat, CircleAlert, LogIn, KeyRound, BookOpen, Send
+  Trash2, Wheat, CircleAlert, LogIn, KeyRound, BookOpen, Send, MessageCircle,
+  Package, ListOrdered, Settings, Home, ChevronRight as Chevron, Lock, RotateCcw, FlaskConical
 } from 'lucide-react';
 import NotFound from '@/pages/not-found';
 
@@ -23,7 +24,12 @@ type Product = {
   variants: ProductVariant[];
 };
 type CartLine = { product: Product; variant: ProductVariant; quantity: number };
-type AuthUser = { email: string };
+type AuthUser = { email: string; name?: string };
+type OrderStatus = 'Confirmed' | 'Packing' | 'Out for delivery' | 'Delivered';
+type OrderRecord = {
+  id: string; date: string; items: CartLine[]; subtotal: number;
+  status: OrderStatus; address: string; phone: string;
+};
 
 // ─── Nav structure ────────────────────────────────────────────────────────────
 type NavSubItem = { label: string; category: Exclude<Category, 'All'> };
@@ -205,6 +211,13 @@ function readCatalog(): Product[] {
 
 function readUser(): AuthUser | null {
   try { return JSON.parse(localStorage.getItem('aggarwal-user') || 'null'); } catch { return null; }
+}
+function readOrders(): OrderRecord[] {
+  try { return JSON.parse(localStorage.getItem('aggarwal-orders') || '[]'); } catch { return []; }
+}
+function saveOrder(order: OrderRecord) {
+  const orders = readOrders();
+  localStorage.setItem('aggarwal-orders', JSON.stringify([order, ...orders]));
 }
 
 // ─── Auth Modal ───────────────────────────────────────────────────────────────
@@ -519,8 +532,18 @@ function Header({
                 <UserRound className="size-4" />
                 <span className="max-w-[80px] truncate">{user.email.split('@')[0]}</span>
               </button>
-              <div className="absolute right-0 top-full z-50 mt-1 hidden w-44 rounded-2xl border border-border bg-background p-2 shadow-xl group-focus-within:block group-hover:block">
+              <div className="absolute right-0 top-full z-50 mt-1 hidden w-52 rounded-2xl border border-border bg-background p-2 shadow-xl group-focus-within:block group-hover:block">
                 <p className="truncate px-3 py-2 text-xs text-muted-foreground">{user.email}</p>
+                <Link href="/account" className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold hover:bg-muted" data-testid="link-my-account">
+                  <UserRound className="size-4" /> My Account
+                </Link>
+                <Link href="/account?tab=orders" className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold hover:bg-muted" data-testid="link-my-orders">
+                  <ListOrdered className="size-4" /> My Orders
+                </Link>
+                <Link href="/account?tab=wishlist" className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold hover:bg-muted" data-testid="link-my-wishlist">
+                  <Heart className="size-4" /> Wishlist
+                </Link>
+                <div className="my-1 border-t border-border" />
                 <button
                   onClick={onLogout}
                   className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-destructive hover:bg-muted"
@@ -917,6 +940,69 @@ function ShopSection({
 }
 
 // ─── Full Shop Page ───────────────────────────────────────────────────────────
+// ─── Page Hero (photo + trust strip) ─────────────────────────────────────────
+const CATEGORY_IMAGES: Partial<Record<Category | 'Blog' | 'Account' | 'Default', string>> = {
+  All:      '/hero-mithai.jpg',
+  Mithai:   '/hero-mithai.jpg',
+  Namkeen:  '/namkeen-bowl.jpg',
+  Snacks:   '/ladoo-plate.jpg',
+  Gifting:  '/hero-mithai.jpg',
+  Blog:     '/ladoo-plate.jpg',
+  Account:  '/hero-mithai.jpg',
+  Default:  '/hero-mithai.jpg',
+};
+
+const PAGE_TRUST_ITEMS = [
+  { icon: PackageCheck, label: 'Freshly prepared' },
+  { icon: FlaskConical, label: 'Lab-tested ingredients' },
+  { icon: Truck,        label: 'On-time delivery' },
+  { icon: RotateCcw,   label: 'Easy returns' },
+];
+
+function PageHero({ image, label, title, subtitle }: {
+  image: string; label?: string; title: string; subtitle?: string;
+}) {
+  return (
+    <div>
+      {/* Photo with overlay */}
+      <div className="relative h-44 w-full overflow-hidden sm:h-56 md:h-64">
+        <img src={image} alt={title} className="h-full w-full object-cover object-center" />
+        {/* Gradient: dark left-bottom, transparent right-top */}
+        <div className="absolute inset-0 bg-gradient-to-r from-black/70 via-black/30 to-transparent" />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent" />
+        {/* Text bottom-left */}
+        <div className="absolute bottom-0 left-0 px-5 py-5 sm:px-8 sm:py-7">
+          {label && (
+            <p className="mb-1 font-mono-ui text-[9px] uppercase tracking-[.3em] text-white/70">{label}</p>
+          )}
+          <h1 className="font-display text-3xl font-semibold text-white drop-shadow-md sm:text-4xl md:text-5xl">
+            {title}
+          </h1>
+          {subtitle && (
+            <p className="mt-1 max-w-md text-sm text-white/80 drop-shadow sm:text-base">{subtitle}</p>
+          )}
+        </div>
+      </div>
+      {/* Trust strip */}
+      <div className="bg-secondary">
+        <div className="mx-auto flex max-w-7xl items-center justify-between overflow-x-auto px-5 sm:px-8">
+          {PAGE_TRUST_ITEMS.map(({ icon: Icon, label: lbl }, i) => (
+            <div key={lbl} className="flex items-center">
+              <div className="flex shrink-0 items-center gap-2 py-3 text-secondary-foreground">
+                <Icon className="size-4 shrink-0 opacity-80" />
+                <span className="whitespace-nowrap text-xs font-semibold">{lbl}</span>
+              </div>
+              {i < PAGE_TRUST_ITEMS.length - 1 && (
+                <span className="mx-4 text-secondary-foreground/30 select-none">|</span>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ShopPage({
   catalog, wishlist, onWishlist, onDetail, onAdd,
 }: {
@@ -950,22 +1036,19 @@ function ShopPage({
     [catalog, category, query, sort]
   );
 
+  const categoryImage = CATEGORY_IMAGES[category] ?? CATEGORY_IMAGES['Default']!;
+  const categorySubtitle = category === 'All'
+    ? 'Browse our full counter — sweets, namkeen, snacks, and gift boxes.'
+    : (categories.find(c => c.label === category)?.note ?? '');
+
   return (
     <div className="min-h-screen">
-      {/* Category hero banner */}
-      <div className="border-b border-border bg-primary px-5 py-10 text-primary-foreground sm:px-8 sm:py-14">
-        <div className="mx-auto max-w-7xl">
-          <p className="font-mono-ui text-[10px] uppercase tracking-[.25em] text-accent">Aggarwal Sweets</p>
-          <h1 className="mt-2 font-display text-4xl font-semibold sm:text-5xl">
-            {category === 'All' ? 'All Products' : category}
-          </h1>
-          <p className="mt-3 max-w-lg text-sm leading-6 text-primary-foreground/70">
-            {category === 'All'
-              ? 'Browse our full counter — sweets, namkeen, snacks, and gift boxes.'
-              : categories.find(c => c.label === category)?.note ?? ''}
-          </p>
-        </div>
-      </div>
+      <PageHero
+        image={categoryImage}
+        label="Aggarwal Sweets · Sirsa"
+        title={category === 'All' ? 'All Products' : category}
+        subtitle={categorySubtitle}
+      />
 
       <div className="mx-auto max-w-7xl px-5 py-10 sm:px-8">
         {/* Filters */}
@@ -1020,15 +1103,12 @@ function ShopPage({
 function BlogPage() {
   return (
     <div className="min-h-screen">
-      <div className="border-b border-border bg-primary px-5 py-10 text-primary-foreground sm:px-8 sm:py-14">
-        <div className="mx-auto max-w-7xl">
-          <p className="font-mono-ui text-[10px] uppercase tracking-[.25em] text-accent">Aggarwal Sweets</p>
-          <h1 className="mt-2 font-display text-4xl font-semibold sm:text-5xl">Stories & Recipes</h1>
-          <p className="mt-3 max-w-lg text-sm leading-6 text-primary-foreground/70">
-            Heritage, craft, and the art of making sweets that carry meaning.
-          </p>
-        </div>
-      </div>
+      <PageHero
+        image={CATEGORY_IMAGES['Blog']!}
+        label="Aggarwal Sweets · Sirsa"
+        title="Stories & Recipes"
+        subtitle="Heritage, craft, and the art of making sweets that carry meaning."
+      />
       <div className="mx-auto max-w-7xl px-5 py-10 sm:px-8">
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-2">
           {blogPosts.map((post, i) => (
@@ -1244,7 +1324,10 @@ function ProductDrawer({ product, onClose, onAdd }: { product: Product; onClose:
 }
 
 // ─── Cart Drawer ──────────────────────────────────────────────────────────────
-function CartDrawer({ cart, subtotal, updateQty, onClose, onCheckout }: { cart: CartLine[]; subtotal: number; updateQty: (i: number, delta: number) => void; onClose: () => void; onCheckout: () => void }) {
+function CartDrawer({ cart, subtotal, updateQty, onClose, onCheckout, user, onAuthOpen }: {
+  cart: CartLine[]; subtotal: number; updateQty: (i: number, delta: number) => void;
+  onClose: () => void; onCheckout: () => void; user: AuthUser | null; onAuthOpen: () => void;
+}) {
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-primary/40 backdrop-blur-sm" onMouseDown={onClose}>
       <div className="flex h-full w-full max-w-md flex-col bg-background shadow-2xl" onMouseDown={e => e.stopPropagation()}>
@@ -1291,9 +1374,21 @@ function CartDrawer({ cart, subtotal, updateQty, onClose, onCheckout }: { cart: 
             <div className="border-t border-border bg-card p-5">
               <div className="flex justify-between text-sm"><span>Subtotal</span><span className="font-mono-ui font-bold">{money(subtotal)}</span></div>
               <p className="mt-2 text-xs text-muted-foreground">Delivery is free for orders over ₹799 in Sirsa.</p>
-              <button onClick={onCheckout} className="mt-5 flex w-full items-center justify-center gap-2 rounded-full bg-secondary py-4 text-sm font-bold text-secondary-foreground" data-testid="button-proceed-checkout">
-                Proceed to checkout <ArrowRight className="size-4" />
-              </button>
+              {user ? (
+                <button onClick={onCheckout} className="mt-5 flex w-full items-center justify-center gap-2 rounded-full bg-secondary py-4 text-sm font-bold text-secondary-foreground" data-testid="button-proceed-checkout">
+                  Proceed to checkout <ArrowRight className="size-4" />
+                </button>
+              ) : (
+                <div className="mt-5 space-y-3">
+                  <div className="flex items-center gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    <Lock className="size-4 shrink-0" />
+                    <span>Sign in to place your order securely.</span>
+                  </div>
+                  <button onClick={() => { onClose(); onAuthOpen(); }} className="flex w-full items-center justify-center gap-2 rounded-full bg-primary py-4 text-sm font-bold text-primary-foreground" data-testid="button-cart-signin">
+                    <UserRound className="size-4" /> Sign in to checkout
+                  </button>
+                </div>
+              )}
             </div>
           </>
         )}
@@ -1303,19 +1398,45 @@ function CartDrawer({ cart, subtotal, updateQty, onClose, onCheckout }: { cart: 
 }
 
 // ─── Checkout ─────────────────────────────────────────────────────────────────
-function Checkout({ subtotal, onClose, onDone }: { subtotal: number; onClose: () => void; onDone: () => void }) {
+function Checkout({ subtotal, cart, onClose, onDone }: { subtotal: number; cart: CartLine[]; onClose: () => void; onDone: (order: OrderRecord) => void }) {
   const [submitted, setSubmitted] = useState(false);
-  if (submitted) return (
+  const [orderId] = useState(() => `AGS-${Math.floor(1000 + Math.random() * 8999)}`);
+  const [orderRef, setOrderRef] = useState<OrderRecord | null>(null);
+
+  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const address = (form.querySelector('#customer-address') as HTMLTextAreaElement)?.value ?? '';
+    const phone = (form.querySelector('#customer-phone') as HTMLInputElement)?.value ?? '';
+    const order: OrderRecord = {
+      id: orderId,
+      date: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+      items: cart,
+      subtotal,
+      status: 'Confirmed',
+      address,
+      phone,
+    };
+    saveOrder(order);
+    setOrderRef(order);
+    setSubmitted(true);
+  };
+
+  if (submitted && orderRef) return (
     <div className="fixed inset-0 z-[60] grid place-items-center bg-primary/50 p-5 backdrop-blur-sm">
       <div className="w-full max-w-md rounded-3xl bg-background p-8 text-center shadow-2xl">
         <div className="mx-auto grid size-16 place-items-center rounded-full bg-accent text-accent-foreground"><Check className="size-8" /></div>
         <h2 className="mt-5 font-display text-3xl">We've got your order.</h2>
         <p className="mt-3 text-sm leading-6 text-muted-foreground">Our team will call you shortly to confirm delivery. Your sweets will leave our counter fresh.</p>
-        <div className="mt-6 rounded-2xl bg-muted p-4 text-left text-xs">
-          <div className="flex justify-between"><span>Order reference</span><b className="font-mono-ui">AGS-{Math.floor(1000 + Math.random() * 8999)}</b></div>
-          <div className="mt-2 flex justify-between"><span>Payment</span><b>Cash on delivery</b></div>
+        <div className="mt-6 rounded-2xl bg-muted p-4 text-left text-xs space-y-2">
+          <div className="flex justify-between"><span>Order reference</span><b className="font-mono-ui">{orderRef.id}</b></div>
+          <div className="flex justify-between"><span>Payment</span><b>Cash on delivery</b></div>
+          <div className="flex justify-between"><span>Items</span><b>{orderRef.items.reduce((s, l) => s + l.quantity, 0)} packs</b></div>
         </div>
-        <button onClick={onDone} className="mt-6 w-full rounded-full bg-primary py-3.5 text-sm font-bold text-primary-foreground" data-testid="button-finish-order">Back to the counter</button>
+        <Link href="/account" onClick={() => onDone(orderRef)} className="mt-4 flex items-center justify-center gap-2 text-xs font-bold text-secondary underline underline-offset-2">
+          <ListOrdered className="size-3.5" /> View in My Orders
+        </Link>
+        <button onClick={() => onDone(orderRef)} className="mt-4 w-full rounded-full bg-primary py-3.5 text-sm font-bold text-primary-foreground" data-testid="button-finish-order">Back to the counter</button>
       </div>
     </div>
   );
@@ -1329,7 +1450,7 @@ function Checkout({ subtotal, onClose, onDone }: { subtotal: number; onClose: ()
           </div>
           <button onClick={onClose} className="grid size-9 place-items-center rounded-full hover:bg-muted" aria-label="Close checkout" data-testid="button-close-checkout"><X className="size-5" /></button>
         </div>
-        <form className="space-y-5 p-5 sm:p-8" onSubmit={e => { e.preventDefault(); setSubmitted(true); }} data-testid="form-checkout">
+        <form className="space-y-5 p-5 sm:p-8" onSubmit={handleSubmit} data-testid="form-checkout">
           <div>
             <label className="mb-2 block text-xs font-bold uppercase tracking-wider" htmlFor="customer-name">Your name</label>
             <input id="customer-name" required className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-ring" placeholder="The person opening the box" data-testid="input-customer-name" />
@@ -1350,7 +1471,7 @@ function Checkout({ subtotal, onClose, onDone }: { subtotal: number; onClose: ()
             <div className="flex justify-between text-sm"><span>Order total</span><b className="font-mono-ui">{money(subtotal)}</b></div>
             <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground"><Banknote className="size-4 text-secondary" /> Cash on delivery · no advance payment</div>
           </div>
-          <button className="flex w-full items-center justify-center gap-2 rounded-full bg-secondary py-4 text-sm font-bold text-secondary-foreground" data-testid="button-place-order">
+          <button type="submit" className="flex w-full items-center justify-center gap-2 rounded-full bg-secondary py-4 text-sm font-bold text-secondary-foreground" data-testid="button-place-order">
             Place COD order <Check className="size-4" />
           </button>
         </form>
@@ -1435,13 +1556,294 @@ function AdminPage() {
   );
 }
 
+// ─── Floating Contact Buttons ─────────────────────────────────────────────────
+function FloatingButtons() {
+  const PHONE = '01666234786';
+  const WA_NUMBER = '911666234786';
+  const WA_MSG = encodeURIComponent('Hello! I would like to order sweets from Aggarwal Sweets Sirsa.');
+  return (
+    <div className="fixed bottom-6 right-5 z-40 flex flex-col items-end gap-3" aria-label="Quick contact">
+      {/* WhatsApp */}
+      <a
+        href={`https://wa.me/${WA_NUMBER}?text=${WA_MSG}`}
+        target="_blank" rel="noreferrer"
+        aria-label="Chat on WhatsApp"
+        data-testid="button-whatsapp"
+        className="group flex items-center gap-2 rounded-full bg-[#25D366] px-4 py-3 text-white shadow-lg transition-transform hover:-translate-y-0.5 hover:shadow-xl"
+      >
+        <MessageCircle className="size-5 fill-white" />
+        <span className="max-w-0 overflow-hidden whitespace-nowrap text-sm font-bold transition-all duration-300 group-hover:max-w-xs">WhatsApp us</span>
+      </a>
+      {/* Call */}
+      <a
+        href={`tel:${PHONE}`}
+        aria-label="Call us"
+        data-testid="button-call"
+        className="group flex items-center gap-2 rounded-full bg-primary px-4 py-3 text-primary-foreground shadow-lg transition-transform hover:-translate-y-0.5 hover:shadow-xl"
+      >
+        <Phone className="size-5" />
+        <span className="max-w-0 overflow-hidden whitespace-nowrap text-sm font-bold transition-all duration-300 group-hover:max-w-xs">{PHONE}</span>
+      </a>
+    </div>
+  );
+}
+
+// ─── Account Page ─────────────────────────────────────────────────────────────
+const ORDER_STATUSES: Record<OrderStatus, { label: string; color: string }> = {
+  Confirmed:         { label: 'Confirmed', color: 'bg-blue-100 text-blue-700' },
+  Packing:           { label: 'Being packed', color: 'bg-amber-100 text-amber-700' },
+  'Out for delivery':{ label: 'Out for delivery', color: 'bg-orange-100 text-orange-700' },
+  Delivered:         { label: 'Delivered', color: 'bg-green-100 text-green-700' },
+};
+
+function AccountPage({ user, wishlist, catalog, onAuthOpen, onLogout, onDetail }: {
+  user: AuthUser | null;
+  wishlist: string[];
+  catalog: Product[];
+  onAuthOpen: () => void;
+  onLogout: () => void;
+  onDetail: (p: Product) => void;
+}) {
+  const [, navigate] = useLocation();
+  const searchStr = typeof window !== 'undefined' ? window.location.search : '';
+  const urlTab = new URLSearchParams(searchStr).get('tab') ?? 'orders';
+  const [tab, setTab] = useState<'orders' | 'wishlist' | 'profile' | 'addresses'>(
+    (['orders', 'wishlist', 'profile', 'addresses'] as const).includes(urlTab as 'orders') ? urlTab as 'orders' : 'orders'
+  );
+  const [orders, setOrders] = useState<OrderRecord[]>(readOrders);
+  const [name, setName] = useState(user?.name ?? '');
+  const [nameSaved, setNameSaved] = useState(false);
+  const [address, setAddress] = useState(() => {
+    try { return localStorage.getItem('aggarwal-saved-address') ?? ''; } catch { return ''; }
+  });
+  const [addrSaved, setAddrSaved] = useState(false);
+
+  const wishlisted = catalog.filter(p => wishlist.includes(p.id));
+
+  if (!user) return (
+    <div className="flex min-h-[60vh] flex-col items-center justify-center gap-6 px-5 text-center">
+      <div className="grid size-20 place-items-center rounded-full bg-muted text-secondary"><UserRound className="size-10" /></div>
+      <div>
+        <h1 className="font-display text-3xl">My Account</h1>
+        <p className="mt-2 text-sm text-muted-foreground">Sign in to view your orders, wishlist, and profile.</p>
+      </div>
+      <button onClick={onAuthOpen} className="inline-flex items-center gap-2 rounded-full bg-primary px-6 py-3.5 text-sm font-bold text-primary-foreground" data-testid="button-account-signin">
+        <UserRound className="size-4" /> Sign in / Register
+      </button>
+    </div>
+  );
+
+  const tabs: { key: typeof tab; label: string; icon: typeof UserRound }[] = [
+    { key: 'orders', label: 'My Orders', icon: ListOrdered },
+    { key: 'wishlist', label: 'Wishlist', icon: Heart },
+    { key: 'profile', label: 'Profile', icon: UserRound },
+    { key: 'addresses', label: 'Addresses', icon: MapPin },
+  ];
+
+  return (
+    <div className="min-h-screen bg-muted/30">
+      <PageHero
+        image={CATEGORY_IMAGES['Account']!}
+        label="Your account"
+        title={user.name ? `Hello, ${user.name}` : 'Hello there'}
+        subtitle={user.email}
+      />
+
+      <div className="mx-auto max-w-7xl px-5 py-8 sm:px-8">
+        <div className="flex gap-8 lg:items-start">
+          {/* Sidebar */}
+          <aside className="hidden w-52 shrink-0 lg:block">
+            <nav className="space-y-1 rounded-2xl border border-border bg-background p-2 shadow-sm">
+              {tabs.map(({ key, label, icon: Icon }) => (
+                <button key={key} onClick={() => setTab(key)}
+                  className={`flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-sm font-semibold transition-colors ${tab === key ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
+                  data-testid={`tab-${key}`}>
+                  <Icon className="size-4" /> {label}
+                </button>
+              ))}
+              <div className="border-t border-border pt-1 mt-1">
+                <button onClick={onLogout}
+                  className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-sm font-semibold text-destructive hover:bg-muted">
+                  <LogIn className="size-4" /> Sign out
+                </button>
+              </div>
+            </nav>
+          </aside>
+
+          {/* Mobile tab bar */}
+          <div className="lg:hidden w-full mb-6">
+            <div className="flex gap-1 overflow-auto rounded-2xl border border-border bg-background p-2 shadow-sm">
+              {tabs.map(({ key, label, icon: Icon }) => (
+                <button key={key} onClick={() => setTab(key)}
+                  className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold transition-colors ${tab === key ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}>
+                  <Icon className="size-3.5" /> {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Content */}
+          <div className="flex-1 min-w-0">
+            {/* Orders Tab */}
+            {tab === 'orders' && (
+              <div>
+                <h2 className="mb-5 font-display text-2xl">My Orders</h2>
+                {orders.length === 0 ? (
+                  <div className="rounded-2xl border border-border bg-background p-12 text-center">
+                    <Package className="mx-auto size-12 text-muted-foreground/40" />
+                    <p className="mt-4 font-display text-xl">No orders yet</p>
+                    <p className="mt-2 text-sm text-muted-foreground">Your placed orders will appear here.</p>
+                    <Link href="/shop" className="mt-5 inline-flex items-center gap-2 rounded-full bg-primary px-5 py-2.5 text-xs font-bold text-primary-foreground">
+                      Start shopping <ArrowRight className="size-3.5" />
+                    </Link>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {orders.map(order => (
+                      <div key={order.id} className="rounded-2xl border border-border bg-background p-5 shadow-sm">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p className="font-mono-ui text-xs text-muted-foreground">{order.date}</p>
+                            <p className="mt-1 font-display text-lg font-semibold">{order.id}</p>
+                            <p className="text-xs text-muted-foreground">{order.items.reduce((s, l) => s + l.quantity, 0)} items · {money(order.subtotal)}</p>
+                          </div>
+                          <span className={`rounded-full px-3 py-1 text-xs font-bold ${ORDER_STATUSES[order.status].color}`}>
+                            {ORDER_STATUSES[order.status].label}
+                          </span>
+                        </div>
+                        {/* Items */}
+                        <div className="mt-4 flex flex-wrap gap-3">
+                          {order.items.map((line, i) => (
+                            <div key={i} className="flex items-center gap-2">
+                              <img src={line.product.image} alt={line.product.name} className="size-12 rounded-xl object-cover" />
+                              <div>
+                                <p className="text-xs font-semibold">{line.product.name}</p>
+                                <p className="text-[10px] text-muted-foreground">{line.variant.weight} × {line.quantity}</p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        {order.address && (
+                          <p className="mt-3 flex items-start gap-1.5 text-xs text-muted-foreground">
+                            <MapPin className="mt-0.5 size-3.5 shrink-0" />
+                            {order.address}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Wishlist Tab */}
+            {tab === 'wishlist' && (
+              <div>
+                <h2 className="mb-5 font-display text-2xl">Wishlist</h2>
+                {wishlisted.length === 0 ? (
+                  <div className="rounded-2xl border border-border bg-background p-12 text-center">
+                    <Heart className="mx-auto size-12 text-muted-foreground/40" />
+                    <p className="mt-4 font-display text-xl">Nothing saved yet</p>
+                    <p className="mt-2 text-sm text-muted-foreground">Tap the ♥ on any product to save it here.</p>
+                    <Link href="/shop" className="mt-5 inline-flex items-center gap-2 rounded-full bg-primary px-5 py-2.5 text-xs font-bold text-primary-foreground">
+                      Browse products <ArrowRight className="size-3.5" />
+                    </Link>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3">
+                    {wishlisted.map(product => (
+                      <button key={product.id} onClick={() => onDetail(product)}
+                        className="group overflow-hidden rounded-2xl border border-border bg-background text-left transition-all hover:-translate-y-1 hover:shadow-lg">
+                        <div className="relative aspect-square overflow-hidden bg-muted">
+                          <img src={product.image} alt={product.name} className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105" />
+                        </div>
+                        <div className="p-3">
+                          <p className="font-display text-base font-semibold">{product.name}</p>
+                          <p className="mt-1 text-xs text-muted-foreground">From {money(lowestPrice(product))}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Profile Tab */}
+            {tab === 'profile' && (
+              <div className="max-w-md">
+                <h2 className="mb-5 font-display text-2xl">Profile</h2>
+                <div className="rounded-2xl border border-border bg-background p-6 shadow-sm space-y-5">
+                  <div>
+                    <label className="mb-2 block text-xs font-bold uppercase tracking-wider">Email</label>
+                    <div className="flex items-center gap-2 rounded-xl border border-input bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+                      <Mail className="size-4 shrink-0" /> {user.email}
+                    </div>
+                    <p className="mt-1 text-[11px] text-muted-foreground">Email cannot be changed after registration.</p>
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-xs font-bold uppercase tracking-wider" htmlFor="account-name">Display name</label>
+                    <input id="account-name" value={name} onChange={e => { setName(e.target.value); setNameSaved(false); }}
+                      placeholder="Your name" className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                  </div>
+                  <button
+                    onClick={() => {
+                      const updated: AuthUser = { ...user, name };
+                      localStorage.setItem('aggarwal-user', JSON.stringify(updated));
+                      setNameSaved(true);
+                    }}
+                    className="flex items-center gap-2 rounded-full bg-primary px-5 py-3 text-xs font-bold text-primary-foreground"
+                    data-testid="button-save-profile">
+                    {nameSaved ? <><Check className="size-4" /> Saved!</> : 'Save profile'}
+                  </button>
+                </div>
+                <div className="mt-6 rounded-2xl border border-destructive/30 bg-background p-6 shadow-sm">
+                  <p className="text-sm font-bold text-destructive">Danger zone</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Signing out will remove your session from this device.</p>
+                  <button onClick={onLogout} className="mt-4 flex items-center gap-2 rounded-full border border-destructive px-5 py-2.5 text-xs font-bold text-destructive hover:bg-destructive/5" data-testid="button-account-logout">
+                    <LogIn className="size-4" /> Sign out
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Addresses Tab */}
+            {tab === 'addresses' && (
+              <div className="max-w-md">
+                <h2 className="mb-5 font-display text-2xl">Saved Address</h2>
+                <div className="rounded-2xl border border-border bg-background p-6 shadow-sm space-y-4">
+                  <div>
+                    <label className="mb-2 block text-xs font-bold uppercase tracking-wider" htmlFor="saved-address">Delivery address</label>
+                    <textarea id="saved-address" rows={4} value={address}
+                      onChange={e => { setAddress(e.target.value); setAddrSaved(false); }}
+                      placeholder="House number, street, landmark, city, PIN"
+                      className="w-full resize-none rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                  </div>
+                  <button
+                    onClick={() => { localStorage.setItem('aggarwal-saved-address', address); setAddrSaved(true); }}
+                    className="flex items-center gap-2 rounded-full bg-primary px-5 py-3 text-xs font-bold text-primary-foreground"
+                    data-testid="button-save-address">
+                    {addrSaved ? <><Check className="size-4" /> Saved!</> : <><MapPin className="size-4" /> Save address</>}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Shell prop types (defined before SharedShell) ────────────────────────────
 type ShellChildProps = {
   catalog: Product[];
   wishlist: string[];
+  user: AuthUser | null;
   onWishlist: (id: string) => void;
   onDetail: (p: Product) => void;
   onAdd: (p: Product, v?: ProductVariant) => void;
+  onAuthOpen: () => void;
+  onLogout: () => void;
 };
 type ShellRenderProp = (props: ShellChildProps) => React.ReactNode;
 
@@ -1460,8 +1862,7 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
   const [checkout, setCheckout] = useState(false);
   const [ordered, setOrdered] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
-  const [newsletter, setNewsletter] = useState('');
-  const [newsletterDone, setNewsletterDone] = useState(false);
+  const [pendingCheckout, setPendingCheckout] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => { localStorage.setItem('aggarwal-cart', JSON.stringify(cart)); }, [cart]);
@@ -1493,8 +1894,34 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
     setUser(null);
   };
 
-  // Pass catalog and handlers down via context-like approach using cloneElement or just prop drill per route
-  // Since routes each need catalog/wishlist/onDetail/onAdd, we render them as children with those props
+  const handleLogin = (u: AuthUser) => {
+    setUser(u);
+    if (pendingCheckout) {
+      setPendingCheckout(false);
+      setAuthOpen(false);
+      setCheckout(true);
+    }
+  };
+
+  const handleProceedCheckout = () => {
+    setCartOpen(false);
+    if (!user) {
+      setPendingCheckout(true);
+      setAuthOpen(true);
+    } else {
+      setCheckout(true);
+    }
+  };
+
+  const shellProps: ShellChildProps = {
+    catalog, wishlist, user,
+    onWishlist: toggleWishlist,
+    onDetail: setDetail,
+    onAdd: addToCart,
+    onAuthOpen: () => setAuthOpen(true),
+    onLogout: handleLogout,
+  };
+
   return (
     <div className="min-h-[100dvh] overflow-x-hidden">
       <PromoMarquee />
@@ -1509,22 +1936,37 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
       />
       <BenefitMarquee />
 
-      {children({ catalog, wishlist, onWishlist: toggleWishlist, onDetail: setDetail, onAdd: addToCart })}
+      {children(shellProps)}
 
       <Footer />
+      <FloatingButtons />
 
       {detail && <ProductDrawer product={detail} onClose={() => setDetail(null)} onAdd={addToCart} />}
-      {cartOpen && <CartDrawer cart={cart} subtotal={subtotal} updateQty={updateQty} onClose={() => setCartOpen(false)} onCheckout={() => { setCartOpen(false); setCheckout(true); }} />}
-      {checkout && <Checkout subtotal={subtotal} onClose={() => setCheckout(false)} onDone={() => { setCheckout(false); setOrdered(true); setCart([]); }} />}
+      {cartOpen && (
+        <CartDrawer
+          cart={cart} subtotal={subtotal} updateQty={updateQty}
+          onClose={() => setCartOpen(false)}
+          onCheckout={handleProceedCheckout}
+          user={user}
+          onAuthOpen={() => { setCartOpen(false); setPendingCheckout(true); setAuthOpen(true); }}
+        />
+      )}
+      {checkout && (
+        <Checkout
+          subtotal={subtotal} cart={cart}
+          onClose={() => setCheckout(false)}
+          onDone={(_order) => { setCheckout(false); setOrdered(true); setCart([]); }}
+        />
+      )}
       {ordered && <OrderConfirmation onClose={() => setOrdered(false)} />}
-      {authOpen && <AuthModal onClose={() => setAuthOpen(false)} onLogin={u => { setUser(u); }} />}
+      {authOpen && <AuthModal onClose={() => { setAuthOpen(false); setPendingCheckout(false); }} onLogin={handleLogin} />}
     </div>
   );
 }
 
 // ─── Home Page ────────────────────────────────────────────────────────────────
 function HomePage(props: ShellChildProps) {
-  const { catalog, wishlist, onWishlist, onDetail, onAdd } = props;
+  const { catalog, wishlist, onWishlist, onDetail, onAdd, user } = props;
   const [newsletter, setNewsletter] = useState('');
   const [newsletterDone, setNewsletterDone] = useState(false);
 
@@ -1554,13 +1996,23 @@ function StoreRouter() {
           {(props: ShellChildProps) => (
             <Switch>
               <Route path="/shop/:category">
-                {(params) => <ShopPage {...props} />}
+                {() => <ShopPage {...props} />}
               </Route>
               <Route path="/shop">
                 <ShopPage {...props} />
               </Route>
               <Route path="/blog">
                 <BlogPage />
+              </Route>
+              <Route path="/account">
+                <AccountPage
+                  user={props.user}
+                  wishlist={props.wishlist}
+                  catalog={props.catalog}
+                  onAuthOpen={props.onAuthOpen}
+                  onLogout={props.onLogout}
+                  onDetail={props.onDetail}
+                />
               </Route>
               <Route path="/">
                 <HomePage {...props} />
