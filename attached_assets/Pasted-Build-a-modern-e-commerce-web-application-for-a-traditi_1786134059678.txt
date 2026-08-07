@@ -1,0 +1,76 @@
+Build a modern e-commerce web application for a traditional Indian sweets, namkeen, and snacks brand — similar in structure and vibe to sites like Om Sweets, Bikanervala, and Shree Anandhaas. The visual language should reflect: warm festive colors (maroon/red, gold, mustard, pink), rounded product cards with "Add to Cart" buttons, banner carousels, "Shop by Category" grids (Sweets / Namkeen / Cookies / Mithai / Gifting / Hampers), a "Bestsellers" section, a "Festival Special" section, store locator section, and a footer with contact/social/policy links. Keep the storefront clean, mobile-responsive, and visually rich with product photography placeholders.
+
+Tech Stack (mandatory)
+Frontend: React (Vite or CRA — prefer Vite), React Router, Axios, Context API or Redux Toolkit for state, plain CSS/Tailwind CSS for styling.
+Backend: Node.js + Express.js, REST API architecture.
+Database: MongoDB (Mongoose) — chosen for flexible product/category schemas.
+Auth: JWT-based sessions.
+Email service: Nodemailer (SMTP — configurable for services like Gmail SMTP, SendGrid, or Amazon SES via .env).
+Package manager: npm only — do NOT generate a pnpm-lock.yaml, yarn.lock, or any pnpm/yarn-specific commands or workspace config anywhere. All install/run instructions must use npm install / npm run.
+OS compatibility: All scripts, file paths, and setup commands must work natively on Windows (no bash-only syntax like rm -rf in npm scripts — use cross-platform packages like rimraf or cross-env where needed; avoid POSIX-only path assumptions; use path.join/path.resolve in Node code).
+Core Authentication Requirements
+Email + OTP login/signup (primary, must work now):
+User enters email → backend generates a 6-digit OTP, stores it (hashed) with a short expiry (e.g., 5–10 minutes) in the DB or a Redis-like TTL collection, and emails it via Nodemailer.
+User enters OTP → backend verifies → issues JWT access token (+ optional refresh token) → creates the user record if it doesn't exist (passwordless signup-on-login).
+Rate-limit OTP requests (e.g., max 3 per 10 minutes per email) and handle "resend OTP" with a cooldown timer on the frontend.
+Mobile OTP login — build as a future-ready placeholder:
+Design the User schema, auth service layer, and API routes so mobile OTP can be added later with minimal changes (e.g., an abstracted sendOtp(channel: 'email' | 'sms', destination) service function, with the SMS branch stubbed/mocked for now — log to console instead of actually sending, behind a config flag SMS_PROVIDER_ENABLED=false).
+Include a disabled/"Coming soon" mobile login tab in the UI so the frontend is already wired for it.
+Store minimal PII; keep JWT secret, OTP expiry, and email provider credentials in .env.
+Payment Requirements
+Now: Cash on Delivery (COD) as the only live payment method at checkout.
+Architecture for future scalability: Build a paymentService abstraction/interface (e.g., strategy pattern) with a single PaymentProvider module that currently only implements codProvider. Structure it so Razorpay/Stripe/PayU can be dropped in later as additional providers without touching the order flow, controller, or checkout UI logic. Include a payment method and status field on the Order schema (method: 'COD' | 'ONLINE', status: 'pending' | 'paid' | 'failed' | 'cod_pending') even though only COD is active today.
+Customer-Facing Features
+Home page: hero banner/carousel, "Shop by Category" grid, bestsellers, festival/seasonal specials, new arrivals, store locator, newsletter signup.
+Product listing pages with category/subcategory filters, weight/pack-size variant selector (e.g., 250g/500g/1kg), sort, and search.
+Product detail page: images, price, variant selector, quantity, add-to-cart, related products.
+Cart & checkout: address form, order summary, COD confirmation, order placed screen.
+Order confirmation email: After successful order placement, automatically send a formatted HTML email (via Nodemailer) to the customer with order ID, itemized products, quantities, total, delivery address, and estimated delivery info. Also send an internal notification email/log to the admin for new orders.
+User account area: order history, order status tracking, saved addresses, profile.
+Wishlist (optional nice-to-have).
+Admin Portal Requirements
+
+Build a separate, protected /admin React app or route-guarded section (role-based JWT) with:
+
+Role-based access with multiple dashboards:
+Owner/Super Admin dashboard: full access — sales analytics (revenue over time, top-selling products, order volume charts), user management, admin/staff account management (create/deactivate staff logins with roles), category management, site content/banner management, coupon/discount management (schema-ready even if unused now), full order management.
+Product Manager / Staff dashboard: restricted role focused on product catalog — add/edit/delete products, manage stock/inventory, update prices and variants, upload product images, manage category/subcategory assignment. No access to financial reports or staff management.
+Use a role field on the Admin/User schema (owner, product_manager, etc.) and middleware to gate routes/UI per role.
+Order management: view all orders, filter by status/date, update order status (placed → confirmed → out for delivery → delivered → cancelled), trigger status-update emails to customers on change.
+Product & inventory management: full CRUD, bulk stock updates, low-stock indicators, image upload handling.
+Category management: CRUD for categories/subcategories used on storefront.
+Customer management: view registered users, order history per user.
+Basic analytics/reporting widgets on the owner dashboard (charts library such as Recharts or Chart.js).
+Admin login should also use secure authentication (can be email+password or email+OTP — specify email+OTP for consistency, admin-only accounts seeded via a script).
+Data Models (minimum)
+User (name, email, phone [nullable, for future mobile OTP], addresses[], role, createdAt)
+Admin (name, email, role: owner/product_manager, passwordHash or OTP-based)
+Otp (email/phone, hashedOtp, expiresAt, purpose)
+Category (name, slug, image, parentCategory)
+Product (name, slug, category, description, images[], variants: [{weight, price, stock}], isFeatured, isFestivalSpecial, status)
+Order (user, items[], address, totalAmount, paymentMethod, paymentStatus, orderStatus, timestamps)
+Coupon (optional, schema only for future)
+Project Structure Expectations
+/client        → React storefront (npm, Vite)
+/admin         → React admin portal (can be same app with route guarding, or separate Vite app)
+/server         → Node.js + Express API
+  /config       → db.js, mailer.js, env loader
+  /models
+  /routes
+  /controllers
+  /services     → otpService.js, paymentService.js (with provider abstraction), emailService.js
+  /middleware   → auth.js, roleGuard.js, rateLimiter.js
+.env.example    → all required env vars documented
+README.md       → Windows-friendly setup instructions using npm only
+Deliverables Expected From the AI Tool
+Full working codebase (frontend storefront, admin portal, backend API) with the folder structure above.
+.env.example files for client and server listing every required variable (Mongo URI, JWT secret, SMTP credentials, OTP expiry, SMS_PROVIDER_ENABLED flag, etc.).
+README.md with Windows-specific, npm-only setup and run instructions (npm install, npm run dev, seeding an owner admin account, etc.).
+Seed script to create an initial Owner admin account.
+Responsive, festive-themed UI matching the reference style described above, built with reusable components (ProductCard, CategoryCard, Banner, Navbar, Footer, DashboardSidebar, DataTable, etc.).
+Clean separation of concerns so payment providers and SMS OTP can be added later without major refactors.
+Non-Functional Requirements
+Code must run identically on Windows 10/11 (PowerShell/CMD) — avoid Unix-only shell commands anywhere in package.json scripts.
+Use npm exclusively; do not reference or generate pnpm/yarn artifacts.
+Include basic input validation, error handling, and loading states throughout.
+Include comments explaining where future integrations (mobile OTP, online payment gateways) should be plugged in.

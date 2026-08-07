@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "AggarwalSweets Sirsa"
+description = "A festive e-commerce storefront for AggarwalSweets Sirsa, offering traditional Indian sweets, namkeen, snacks, gifting hampers, product browsing, cart, COD checkout, and an admin-ready catalog experience."
+version = "1.0.0"
+id = "artifacts/aggarwal-sweets"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 20108
+
+[services.development]
+run = "pnpm --filter @workspace/aggarwal-sweets run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/aggarwal-sweets", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/aggarwal-sweets/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "20108"
+BASE_PATH = "/"
