@@ -1823,22 +1823,25 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
   const [dataLoading, setDataLoading] = useState(true);
   const [blogPosts, setBlogPosts] = useState<BlogPost[]>([]);
   const [coupons, setCoupons] = useState<CouponCode[]>([]);
+  const [adminSettings, setAdminSettings] = useState<Record<string, string>>({});
 
   const fetchAll = async () => {
     setDataLoading(true);
     try {
-      const [p, o, c, b, coupList] = await Promise.all([
+      const [p, o, c, b, coupList, s] = await Promise.all([
         fetch(`${API}/products`).then(r => r.json()),
         fetch(`${API}/orders`).then(r => r.json()),
         fetch(`${API}/customers`).then(r => r.json()),
         fetch(`${API}/blog`).then(r => r.json()),
         fetch(`${API}/coupons`).then(r => r.json()),
+        fetch(`${API}/settings`).then(r => r.json()),
       ]);
       setCatalog(Array.isArray(p) ? p : []);
       setOrders(Array.isArray(o) ? o : []);
       setCustomers(Array.isArray(c) ? c : []);
       setBlogPosts(Array.isArray(b) ? b.map((post: Record<string,unknown>) => ({ ...post, body: Array.isArray(post.body) ? post.body : [] })) : []);
       setCoupons(Array.isArray(coupList) ? coupList : []);
+      if (s && typeof s === 'object') setAdminSettings(s as Record<string, string>);
     } finally { setDataLoading(false); }
   };
 
@@ -1882,6 +1885,7 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
   const navigate = (s: AdminSection) => { setSection(s); setMobileNavOpen(false); };
 
   return (
+    <SiteSettingsContext.Provider value={adminSettings}>
     <div className="flex min-h-[100dvh]">
       {/* Desktop Sidebar */}
       <aside className="hidden w-60 flex-col border-r border-primary-foreground/10 bg-primary lg:flex">
@@ -1972,6 +1976,7 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
         </main>
       </div>
     </div>
+    </SiteSettingsContext.Provider>
   );
 }
 
