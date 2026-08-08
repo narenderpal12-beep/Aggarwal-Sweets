@@ -40,6 +40,10 @@ type BlogPost = {
   date: string; readTime: string; category: string; image: string;
   body: string[];
 };
+type ProductReview = {
+  id: string; productId: string; customerName: string;
+  rating: number; comment: string; approved: boolean; createdAt: string;
+};
 
 // ─── Nav structure ────────────────────────────────────────────────────────────
 type NavSubItem = { label: string; slug: string; subtitle: string; category: Exclude<Category, 'All'> };
@@ -338,7 +342,7 @@ async function apiValidateAdmin(email: string, password: string): Promise<boolea
 }
 
 const ADMIN_EMAIL = 'admin@aggarwalsweets.in';
-type AdminSection = 'dashboard' | 'products' | 'orders' | 'customers' | 'categories' | 'settings' | 'blog' | 'coupons';
+type AdminSection = 'dashboard' | 'products' | 'orders' | 'customers' | 'categories' | 'settings' | 'blog' | 'coupons' | 'reviews';
 type MasterCategory = { id: string; label: string; note: string; image: string; inMenu: boolean; inCraving: boolean };
 
 // ─── Site settings context ────────────────────────────────────────────────────
@@ -1111,13 +1115,21 @@ function ProductCard({
           ))}
         </div>
 
-        <button
-          onClick={() => onAdd(product, selectedVariant)}
-          className="mt-4 flex w-full items-center justify-center gap-2 rounded-full border border-primary/25 py-2.5 text-xs font-bold text-primary transition-colors hover:bg-primary hover:text-primary-foreground"
-          data-testid={`button-add-${product.id}`}
-        >
-          <Plus className="size-3.5" /> Add to box
-        </button>
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <Link href={`/product/${product.id}`}
+            className="flex items-center justify-center gap-1.5 rounded-full border border-border py-2.5 text-xs font-bold text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary"
+            data-testid={`button-detail-${product.id}`}
+          >
+            <Eye className="size-3.5" /> View details
+          </Link>
+          <button
+            onClick={() => onAdd(product, selectedVariant)}
+            className="flex items-center justify-center gap-1.5 rounded-full border border-primary/25 py-2.5 text-xs font-bold text-primary transition-colors hover:bg-primary hover:text-primary-foreground"
+            data-testid={`button-add-${product.id}`}
+          >
+            <Plus className="size-3.5" /> Add to box
+          </button>
+        </div>
       </div>
     </article>
   );
@@ -1907,24 +1919,27 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
   const [dataLoading, setDataLoading] = useState(true);
   const [blogPosts, setBlogPosts] = useState<BlogPost[]>([]);
   const [coupons, setCoupons] = useState<CouponCode[]>([]);
+  const [adminReviews, setAdminReviews] = useState<ProductReview[]>([]);
   const [adminSettings, setAdminSettings] = useState<Record<string, string>>({});
 
   const fetchAll = async () => {
     setDataLoading(true);
     try {
-      const [p, o, c, b, coupList, s] = await Promise.all([
+      const [p, o, c, b, coupList, s, revList] = await Promise.all([
         fetch(`${API}/products`).then(r => r.json()),
         fetch(`${API}/orders`).then(r => r.json()),
         fetch(`${API}/customers`).then(r => r.json()),
         fetch(`${API}/blog`).then(r => r.json()),
         fetch(`${API}/coupons`).then(r => r.json()),
         fetch(`${API}/settings`).then(r => r.json()),
+        fetch(`${API}/reviews/admin/all`).then(r => r.json()),
       ]);
       setCatalog(Array.isArray(p) ? p : []);
       setOrders(Array.isArray(o) ? o : []);
       setCustomers(Array.isArray(c) ? c : []);
       setBlogPosts(Array.isArray(b) ? b.map((post: Record<string,unknown>) => ({ ...post, body: Array.isArray(post.body) ? post.body : [] })) : []);
       setCoupons(Array.isArray(coupList) ? coupList : []);
+      setAdminReviews(Array.isArray(revList) ? revList : []);
       if (s && typeof s === 'object') setAdminSettings(s as Record<string, string>);
     } finally { setDataLoading(false); }
   };
@@ -1964,6 +1979,7 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
     { key: 'customers',  icon: Users,           label: 'Customers' },
     { key: 'blog',       icon: FileText,        label: 'Blog' },
     { key: 'coupons',    icon: Tag,             label: 'Coupons' },
+    { key: 'reviews',    icon: MessageCircle,   label: 'Reviews' },
     { key: 'settings',   icon: Settings,        label: 'Settings' },
   ];
 
@@ -2058,6 +2074,7 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
           {section === 'categories' && <AdminSectionCategories onRefresh={fetchAll} />}
           {section === 'blog'       && <AdminSectionBlog      posts={blogPosts} onRefresh={fetchAll} />}
           {section === 'coupons'   && <AdminSectionCoupons   coupons={coupons} onRefresh={fetchAll} />}
+          {section === 'reviews'   && <AdminSectionReviews   reviews={adminReviews} catalog={catalog} onRefresh={fetchAll} />}
           {section === 'settings'  && <AdminSectionSettings  adminUser={adminUser} />}
         </main>
       </div>
@@ -3850,10 +3867,11 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
     }
   };
 
+  const [, shellNavigate] = useLocation();
   const shellProps: ShellChildProps = {
     catalog, wishlist, user,
     onWishlist: toggleWishlist,
-    onDetail: setDetail,
+    onDetail: (p) => shellNavigate('/product/' + p.id),
     onAdd: addToCart,
     onAuthOpen: () => setAuthOpen(true),
     onLogout: handleLogout,
@@ -4150,6 +4168,380 @@ function ContactPage() {
   );
 }
 
+// ─── Product Detail Page ──────────────────────────────────────────────────────
+function ProductDetailPage({ onAdd, user }: { onAdd: (p: Product, v?: ProductVariant) => void; user: AuthUser | null }) {
+  const { id } = useParams<{ id: string }>();
+  const [product, setProduct] = useState<Product | null>(null);
+  const [reviews, setReviews] = useState<ProductReview[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedVariant, setSelectedVariant] = useState<ProductVariant | null>(null);
+  const [added, setAdded] = useState(false);
+  const [form, setForm] = useState({ name: user?.name ?? '', rating: 5, comment: '' });
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [reviewError, setReviewError] = useState('');
+
+  const fetchReviews = () =>
+    fetch(`${API}/reviews/${id}`).then(r => r.json()).then(r => setReviews(Array.isArray(r) ? r : [])).catch(() => {});
+
+  useEffect(() => {
+    if (!id) return;
+    setLoading(true);
+    Promise.all([
+      fetch(`${API}/products`).then(r => r.json()),
+      fetch(`${API}/reviews/${id}`).then(r => r.json()),
+    ]).then(([prods, revs]) => {
+      const found = (Array.isArray(prods) ? prods : []).find((p: Product) => p.id === id) ?? null;
+      setProduct(found);
+      if (found) setSelectedVariant(defaultVariant(found));
+      setReviews(Array.isArray(revs) ? revs : []);
+    }).finally(() => setLoading(false));
+  }, [id]);
+
+  const handleAdd = () => {
+    if (!product || !selectedVariant) return;
+    onAdd(product, selectedVariant);
+    setAdded(true);
+    setTimeout(() => setAdded(false), 2200);
+  };
+
+  const handleReview = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.name.trim() || !form.comment.trim()) { setReviewError('Please fill in your name and comment.'); return; }
+    setSubmitting(true); setReviewError('');
+    try {
+      await fetch(`${API}/reviews`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productId: id, customerName: form.name.trim(), rating: form.rating, comment: form.comment.trim() }),
+      });
+      setSubmitted(true);
+      setForm({ name: '', rating: 5, comment: '' });
+    } catch { setReviewError('Something went wrong. Please try again.'); }
+    finally { setSubmitting(false); }
+  };
+
+  if (loading) return (
+    <div className="flex min-h-[60vh] items-center justify-center">
+      <Loader2 className="size-6 animate-spin text-muted-foreground" />
+    </div>
+  );
+  if (!product) return (
+    <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4">
+      <Package className="size-10 text-muted-foreground/30" />
+      <p className="text-muted-foreground">Product not found.</p>
+      <Link href="/shop" className="rounded-full bg-primary px-6 py-2.5 text-sm font-bold text-primary-foreground">Back to shop</Link>
+    </div>
+  );
+
+  const weights   = Array.from(new Set(product.variants.map(v => v.weight)));
+  const materials = Array.from(new Set(product.variants.map(v => v.material)));
+  const avgRating = reviews.length
+    ? (reviews.reduce((s, r) => s + r.rating, 0) / reviews.length).toFixed(1)
+    : product.rating.toFixed(1);
+
+  return (
+    <div className="mx-auto max-w-7xl px-5 py-10 sm:px-8 sm:py-16">
+      {/* Breadcrumb */}
+      <nav className="mb-8 flex items-center gap-2 text-xs text-muted-foreground">
+        <Link href="/" className="hover:text-foreground">Home</Link>
+        <ChevronRightSmall className="size-3" />
+        <Link href="/shop" className="hover:text-foreground">Shop</Link>
+        <ChevronRightSmall className="size-3" />
+        <span className="text-foreground">{product.name}</span>
+      </nav>
+
+      {/* Main grid */}
+      <div className="grid gap-10 lg:grid-cols-2 lg:gap-16">
+        {/* Image */}
+        <div className="relative aspect-square overflow-hidden rounded-3xl bg-muted">
+          <img src={product.image} alt={product.name} className="h-full w-full object-cover" />
+          {product.badge && (
+            <span className="absolute left-4 top-4 rounded-full bg-accent px-3 py-1.5 font-mono-ui text-[10px] font-bold uppercase tracking-wider text-accent-foreground">
+              {product.badge}
+            </span>
+          )}
+        </div>
+
+        {/* Details */}
+        <div className="flex flex-col">
+          <p className="font-mono-ui text-[10px] uppercase tracking-[.25em] text-secondary">{product.category}</p>
+          <h1 className="mt-2 font-display text-3xl font-semibold leading-tight sm:text-4xl">{product.name}</h1>
+
+          {/* Rating row */}
+          <div className="mt-3 flex items-center gap-2">
+            <div className="flex items-center gap-0.5">
+              {[1,2,3,4,5].map(i => <Star key={i} className={`size-4 ${Number(avgRating) >= i ? 'fill-accent text-accent' : 'fill-muted text-muted-foreground/20'}`} />)}
+            </div>
+            <span className="font-mono-ui text-sm font-bold">{avgRating}</span>
+            <span className="text-xs text-muted-foreground">· {reviews.length} review{reviews.length !== 1 ? 's' : ''}</span>
+          </div>
+
+          {/* Description */}
+          <p className="mt-5 text-sm leading-7 text-muted-foreground">
+            {product.description || 'Fresh from our counter — made with the finest ingredients, packed with care.'}
+          </p>
+
+          {/* Material selector */}
+          {materials.length > 1 && (
+            <div className="mt-6">
+              <p className="mb-2 text-[10px] font-bold uppercase tracking-wider">Material</p>
+              <div className="flex flex-wrap gap-2">
+                {materials.map(m => (
+                  <button key={m}
+                    onClick={() => {
+                      const v = product.variants.find(v => v.material === m && v.weight === selectedVariant?.weight)
+                        ?? product.variants.find(v => v.material === m);
+                      if (v) setSelectedVariant(v);
+                    }}
+                    className={`rounded-full border px-4 py-2 text-xs font-bold transition-colors ${selectedVariant?.material === m ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background hover:border-primary/40'}`}>
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Weight/size selector */}
+          <div className="mt-5">
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-wider">Size</p>
+            <div className="flex flex-wrap gap-2">
+              {weights.map(w => (
+                <button key={w}
+                  onClick={() => {
+                    const v = product.variants.find(v => v.weight === w && v.material === selectedVariant?.material)
+                      ?? product.variants.find(v => v.weight === w);
+                    if (v) setSelectedVariant(v);
+                  }}
+                  className={`rounded-full border px-4 py-2 text-xs font-bold transition-colors ${selectedVariant?.weight === w ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background hover:border-primary/40'}`}>
+                  {w}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Price + CTA */}
+          <div className="mt-8 flex items-center gap-3">
+            <p className="font-display text-3xl font-bold">{money(selectedVariant?.price ?? lowestPrice(product))}</p>
+            <span className="text-sm text-muted-foreground">/ {product.unit}</span>
+          </div>
+          <button onClick={handleAdd}
+            className={`mt-4 flex w-full items-center justify-center gap-2 rounded-full py-4 text-sm font-bold transition-all duration-200 ${added ? 'bg-green-600 text-white' : 'bg-primary text-primary-foreground hover:opacity-90'}`}>
+            {added ? <><Check className="size-4" /> Added to box!</> : <><Plus className="size-4" /> Add to box</>}
+          </button>
+          <button type="button" onClick={() => window.history.back()}
+            className="mt-3 text-center text-xs text-muted-foreground hover:text-foreground">
+            ← Back
+          </button>
+
+          {/* Tags */}
+          {product.tags && product.tags.length > 0 && (
+            <div className="mt-6 flex flex-wrap gap-1.5">
+              {product.tags.map(t => (
+                <span key={t} className="rounded-full bg-muted px-2.5 py-1 text-[10px] font-semibold text-muted-foreground">{t}</span>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Reviews ── */}
+      <div className="mt-16 border-t border-border pt-14">
+        <h2 className="font-display text-2xl font-semibold">Customer Reviews</h2>
+        <p className="mt-1 text-sm text-muted-foreground">Verified experiences from our customers in Sirsa and beyond.</p>
+
+        {/* Existing approved reviews */}
+        <div className="mt-8 space-y-5">
+          {reviews.length === 0 ? (
+            <div className="rounded-2xl border border-border bg-card px-6 py-14 text-center">
+              <MessageCircle className="mx-auto size-8 text-muted-foreground/25" />
+              <p className="mt-3 text-sm text-muted-foreground">No reviews yet — be the first to share your experience!</p>
+            </div>
+          ) : reviews.map(rev => (
+            <div key={rev.id} className="rounded-2xl border border-border bg-card p-5">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="grid size-9 shrink-0 place-items-center rounded-full bg-primary/10 font-display text-sm font-bold text-primary">
+                    {rev.customerName.charAt(0).toUpperCase()}
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold">{rev.customerName}</p>
+                    <p className="text-[10px] text-muted-foreground">
+                      {new Date(rev.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-0.5">
+                  {[1,2,3,4,5].map(i => <Star key={i} className={`size-3.5 ${rev.rating >= i ? 'fill-accent text-accent' : 'fill-muted text-muted-foreground/20'}`} />)}
+                </div>
+              </div>
+              <p className="mt-3 text-sm leading-6 text-muted-foreground">{rev.comment}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* Submit review form */}
+        <div className="mt-10 rounded-2xl border border-border bg-card p-6 sm:p-8">
+          <h3 className="font-display text-xl font-semibold">Write a Review</h3>
+          <p className="mt-1 text-xs text-muted-foreground">Your review will appear after approval by our team.</p>
+          {submitted ? (
+            <div className="mt-8 flex flex-col items-center gap-3 py-6 text-center">
+              <div className="grid size-12 place-items-center rounded-full bg-green-100 text-green-600"><Check className="size-6" /></div>
+              <p className="font-semibold">Thank you for your review!</p>
+              <p className="text-sm text-muted-foreground">It will appear here once approved.</p>
+              <button onClick={() => { setSubmitted(false); fetchReviews(); }} className="mt-2 text-xs text-primary hover:underline">Write another</button>
+            </div>
+          ) : (
+            <form onSubmit={handleReview} className="mt-5 space-y-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="text-[10px] font-bold uppercase tracking-wider">Your Name</label>
+                  <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required
+                    placeholder="e.g. Ramesh Kumar"
+                    className="mt-1 w-full rounded-xl border border-input px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold uppercase tracking-wider">Rating</label>
+                  <div className="mt-2 flex items-center gap-1">
+                    {[1,2,3,4,5].map(i => (
+                      <button key={i} type="button" onClick={() => setForm(f => ({ ...f, rating: i }))}
+                        className="transition-transform hover:scale-125">
+                        <Star className={`size-7 ${form.rating >= i ? 'fill-accent text-accent' : 'text-muted-foreground/25'}`} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider">Your Comment</label>
+                <textarea rows={4} value={form.comment} onChange={e => setForm(f => ({ ...f, comment: e.target.value }))} required
+                  placeholder="Tell us about your experience with this product..."
+                  className="mt-1 w-full resize-none rounded-xl border border-input px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+              </div>
+              {reviewError && <p className="text-xs font-semibold text-red-500">{reviewError}</p>}
+              <button type="submit" disabled={submitting}
+                className="flex items-center gap-2 rounded-full bg-primary px-8 py-3 text-sm font-bold text-primary-foreground disabled:opacity-60 hover:opacity-90">
+                {submitting ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+                {submitting ? 'Submitting…' : 'Submit Review'}
+              </button>
+            </form>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Admin · Reviews ──────────────────────────────────────────────────────────
+function AdminSectionReviews({ reviews, catalog, onRefresh }: { reviews: ProductReview[]; catalog: Product[]; onRefresh: () => void }) {
+  const [filter, setFilter] = useState<'all' | 'pending' | 'approved'>('pending');
+
+  const getProductName = (productId: string) =>
+    catalog.find(p => p.id === productId)?.name ?? productId;
+
+  const filtered = reviews.filter(r =>
+    filter === 'all' ? true : filter === 'pending' ? !r.approved : r.approved,
+  );
+  const pendingCount  = reviews.filter(r => !r.approved).length;
+  const approvedCount = reviews.filter(r =>  r.approved).length;
+
+  const approve = async (id: string) => {
+    await fetch(`${API}/reviews/${id}/approve`, { method: 'PUT' });
+    onRefresh();
+  };
+  const remove = async (id: string) => {
+    if (!confirm('Delete this review permanently?')) return;
+    await fetch(`${API}/reviews/${id}`, { method: 'DELETE' });
+    onRefresh();
+  };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="font-display text-2xl font-semibold">Customer Reviews</h2>
+        <p className="mt-1 text-sm text-muted-foreground">Approve reviews to publish them on the product page. Delete spam or inappropriate content.</p>
+      </div>
+
+      {/* Filter tabs */}
+      <div className="flex flex-wrap gap-2">
+        {([['pending', 'Pending', pendingCount], ['approved', 'Approved', approvedCount], ['all', 'All', reviews.length]] as const).map(([key, label, count]) => (
+          <button key={key} onClick={() => setFilter(key)}
+            className={`rounded-full px-4 py-2 text-xs font-bold transition-colors ${filter === key ? 'bg-primary text-primary-foreground' : 'border border-border bg-background text-muted-foreground hover:text-foreground'}`}>
+            {label} <span className="ml-1 opacity-60">({count})</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Table */}
+      <div className="overflow-hidden rounded-2xl border border-border">
+        {filtered.length === 0 ? (
+          <div className="py-16 text-center">
+            <MessageCircle className="mx-auto size-8 text-muted-foreground/25" />
+            <p className="mt-3 text-sm text-muted-foreground">
+              {filter === 'pending' ? 'No pending reviews to approve.' : 'No reviews here yet.'}
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="border-b border-border bg-muted/50">
+                <tr>
+                  <th className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Product</th>
+                  <th className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Reviewer</th>
+                  <th className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Rating</th>
+                  <th className="hidden px-5 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-muted-foreground md:table-cell">Comment</th>
+                  <th className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Status</th>
+                  <th className="px-5 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border bg-background">
+                {filtered.map(r => (
+                  <tr key={r.id} className="hover:bg-muted/30">
+                    <td className="px-5 py-4">
+                      <p className="font-semibold leading-tight">{getProductName(r.productId)}</p>
+                      <p className="text-[10px] text-muted-foreground">
+                        {new Date(r.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                      </p>
+                    </td>
+                    <td className="px-5 py-4 font-medium">{r.customerName}</td>
+                    <td className="px-5 py-4">
+                      <div className="flex items-center gap-0.5">
+                        {[1,2,3,4,5].map(i => <Star key={i} className={`size-3 ${r.rating >= i ? 'fill-accent text-accent' : 'fill-muted text-muted-foreground/20'}`} />)}
+                      </div>
+                      <span className="text-[10px] text-muted-foreground">{r.rating}/5</span>
+                    </td>
+                    <td className="hidden max-w-[240px] px-5 py-4 md:table-cell">
+                      <p className="line-clamp-2 text-xs text-muted-foreground">{r.comment}</p>
+                    </td>
+                    <td className="px-5 py-4">
+                      <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider ${r.approved ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                        {r.approved ? 'Live' : 'Pending'}
+                      </span>
+                    </td>
+                    <td className="px-5 py-4">
+                      <div className="flex items-center justify-end gap-2">
+                        {!r.approved && (
+                          <button onClick={() => approve(r.id)}
+                            className="flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-1.5 text-[10px] font-bold text-white hover:bg-green-700">
+                            <Check className="size-3" /> Approve
+                          </button>
+                        )}
+                        <button onClick={() => remove(r.id)}
+                          className="grid size-7 place-items-center rounded-lg border border-red-200 text-red-400 hover:bg-red-50">
+                          <Trash2 className="size-3" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Router ───────────────────────────────────────────────────────────────────
 function StoreRouter() {
   return (
@@ -4176,6 +4568,9 @@ function StoreRouter() {
               </Route>
               <Route path="/contact">
                 <ContactPage />
+              </Route>
+              <Route path="/product/:id">
+                {() => <ProductDetailPage onAdd={props.onAdd} user={props.user} />}
               </Route>
               <Route path="/account">
                 <AccountPage

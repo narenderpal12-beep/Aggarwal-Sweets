@@ -64,8 +64,20 @@ export const couponCodesTable = pgTable("coupon_codes", {
   description: text("description").notNull().default(""),
 });
 
-export type DbProduct  = typeof productsTable.$inferSelect;
-export type DbOrder    = typeof ordersTable.$inferSelect;
-export type DbCustomer = typeof customersTable.$inferSelect;
-export type DbBlogPost = typeof blogPostsTable.$inferSelect;
-export type DbCoupon   = typeof couponCodesTable.$inferSelect;
+// ─── Product Reviews ──────────────────────────────────────────────────────────
+export const productReviewsTable = pgTable("product_reviews", {
+  id:           text("id").primaryKey(),
+  productId:    text("product_id").notNull(),
+  customerName: text("customer_name").notNull(),
+  rating:       integer("rating").notNull().default(5),
+  comment:      text("comment").notNull().default(""),
+  approved:     boolean("approved").notNull().default(false),
+  createdAt:    timestamp("created_at").notNull().defaultNow(),
+});
+
+export type DbProduct       = typeof productsTable.$inferSelect;
+export type DbOrder         = typeof ordersTable.$inferSelect;
+export type DbCustomer      = typeof customersTable.$inferSelect;
+export type DbBlogPost      = typeof blogPostsTable.$inferSelect;
+export type DbCoupon        = typeof couponCodesTable.$inferSelect;
+export type DbProductReview = typeof productReviewsTable.$inferSelect;

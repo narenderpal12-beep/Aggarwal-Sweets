@@ -7,6 +7,7 @@ import settingsRouter  from "./settings";
 import authRouter      from "./auth";
 import blogRouter      from "./blog";
 import couponsRouter   from "./coupons";
+import reviewsRouter   from "./reviews";
 
 const router: IRouter = Router();
 
@@ -18,5 +19,6 @@ router.use(settingsRouter);
 router.use(authRouter);
 router.use(blogRouter);
 router.use(couponsRouter);
+router.use(reviewsRouter);
 
 export default router;
