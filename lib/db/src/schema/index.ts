@@ -1,4 +1,4 @@
-import { pgTable, text, integer, real, jsonb, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, integer, real, jsonb, timestamp, boolean } from "drizzle-orm/pg-core";
 
 // ─── Products ─────────────────────────────────────────────────────────────────
 export const productsTable = pgTable("products", {
@@ -41,6 +41,31 @@ export const adminSettingsTable = pgTable("admin_settings", {
   value: text("value").notNull(),
 });
 
+// ─── Blog Posts ───────────────────────────────────────────────────────────────
+export const blogPostsTable = pgTable("blog_posts", {
+  id:       text("id").primaryKey(),
+  slug:     text("slug").notNull(),
+  title:    text("title").notNull(),
+  excerpt:  text("excerpt").notNull().default(""),
+  date:     text("date").notNull(),
+  readTime: text("read_time").notNull().default("3 min"),
+  category: text("category").notNull().default("General"),
+  image:    text("image").notNull().default("/hero-mithai.jpg"),
+  body:     jsonb("body").$type<string[]>().notNull().default([]),
+});
+
+// ─── Coupon Codes ─────────────────────────────────────────────────────────────
+export const couponCodesTable = pgTable("coupon_codes", {
+  code:        text("code").primaryKey(),
+  type:        text("type").notNull().default("percent"),   // 'percent' | 'amount'
+  value:       integer("value").notNull(),
+  minOrder:    integer("min_order").notNull().default(0),
+  active:      boolean("active").notNull().default(true),
+  description: text("description").notNull().default(""),
+});
+
 export type DbProduct  = typeof productsTable.$inferSelect;
 export type DbOrder    = typeof ordersTable.$inferSelect;
 export type DbCustomer = typeof customersTable.$inferSelect;
+export type DbBlogPost = typeof blogPostsTable.$inferSelect;
+export type DbCoupon   = typeof couponCodesTable.$inferSelect;

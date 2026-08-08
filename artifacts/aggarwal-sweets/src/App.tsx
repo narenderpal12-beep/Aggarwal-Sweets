@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Route, Switch, Router as WouterRouter, Link, useLocation, useParams } from 'wouter';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, createContext, useContext } from 'react';
 import {
   ArrowRight, BadgeCheck, Banknote, Check, ChevronDown, ChevronLeft, ChevronRight,
   ChevronRight as ChevronRightSmall, Clock3, Gift, Heart, Instagram, Menu, Minus,
@@ -10,7 +10,8 @@ import {
   UserRound, X, ShieldCheck, SlidersHorizontal, LayoutDashboard, Mail, MapPin,
   Trash2, Wheat, CircleAlert, LogIn, KeyRound, BookOpen, Send, MessageCircle,
   Package, ListOrdered, Settings, Home, ChevronRight as Chevron, Lock, RotateCcw, FlaskConical,
-  LogOut, Eye, EyeOff, Pencil, RefreshCw, Users, Loader2
+  LogOut, Eye, EyeOff, Pencil, RefreshCw, Users, Loader2,
+  Tag, Percent, Upload, Palette, FileText, ImageIcon, Type
 } from 'lucide-react';
 import NotFound from '@/pages/not-found';
 
@@ -20,10 +21,12 @@ const queryClient = new QueryClient();
 type Category = 'All' | 'Mithai' | 'Namkeen' | 'Snacks' | 'Gifting';
 type ProductVariant = { material: string; weight: string; price: number };
 type Product = {
-  id: string; name: string; category: Exclude<Category, 'All'>; price: number; unit: string;
+  id: string; name: string; category: string; price: number; unit: string;
   rating: number; reviews: number; description: string; image: string; badge?: string;
   variants: ProductVariant[]; tags?: string[];
 };
+type CouponCode = { code: string; type: 'percent' | 'amount'; value: number; minOrder: number; active: boolean; description: string };
+type AppliedCoupon = { code: string; discount: number };
 type CartLine = { product: Product; variant: ProductVariant; quantity: number };
 type AuthUser = { email: string; name?: string; role?: 'customer' | 'admin' };
 type CustomerRecord = { email: string; name?: string; joinedAt: string };
@@ -173,12 +176,13 @@ const products: Product[] = [
   },
 ];
 
-const categories: { label: Exclude<Category, 'All'>; note: string; icon: typeof Gift; image: string }[] = [
+const DEFAULT_CRAVING_CATEGORIES: { label: string; note: string; icon: typeof Gift; image: string }[] = [
   { label: 'Mithai', note: 'Soft, fragrant, handmade', icon: Sparkles, image: '/hero-mithai.jpg' },
   { label: 'Namkeen', note: 'Crunch for every chai', icon: Wheat, image: '/namkeen-bowl.jpg' },
   { label: 'Snacks', note: 'Old recipes, new cravings', icon: Star, image: '/ladoo-plate.jpg' },
   { label: 'Gifting', note: 'Send a little celebration', icon: Gift, image: '/hero-mithai.jpg' },
 ];
+const ICON_MAP: Record<string, typeof Gift> = { Mithai: Sparkles, Namkeen: Wheat, Snacks: Star, Gifting: Gift };
 
 
 // ─── Blog posts (static) ──────────────────────────────────────────────────────
@@ -328,7 +332,42 @@ async function apiValidateAdmin(email: string, password: string): Promise<boolea
 }
 
 const ADMIN_EMAIL = 'admin@aggarwalsweets.in';
-type AdminSection = 'dashboard' | 'products' | 'orders' | 'customers' | 'settings';
+type AdminSection = 'dashboard' | 'products' | 'orders' | 'customers' | 'settings' | 'blog' | 'coupons';
+
+// ─── Site settings context ────────────────────────────────────────────────────
+const SiteSettingsContext = createContext<Record<string, string>>({});
+const useSiteSettings = () => useContext(SiteSettingsContext);
+
+// ─── Unit presets ─────────────────────────────────────────────────────────────
+const UNIT_PRESETS = ['100 gm', '150 gm', '200 gm', '250 gm', '400 gm', '500 gm', '750 gm', '1 kg', '2 kg', 'per piece', 'per packet', 'per plate', 'per portion', 'per box'];
+
+// ─── Color helpers ────────────────────────────────────────────────────────────
+function hexToHsl(hex: string): string {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  if (!result) return '';
+  let r = parseInt(result[1], 16) / 255;
+  let g = parseInt(result[2], 16) / 255;
+  let b = parseInt(result[3], 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h = 0, s = 0;
+  const l = (max + min) / 2;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = ((g - b) / d + (g < b ? 6 : 0)) / 6; break;
+      case g: h = ((b - r) / d + 2) / 6; break;
+      case b: h = ((r - g) / d + 4) / 6; break;
+    }
+  }
+  return `${Math.round(h * 360)} ${Math.round(s * 100)}% ${Math.round(l * 100)}%`;
+}
+function applyBrandColors(s: Record<string, string>) {
+  const root = document.documentElement;
+  if (s.color_primary)   root.style.setProperty('--primary',   hexToHsl(s.color_primary));
+  if (s.color_secondary) root.style.setProperty('--secondary', hexToHsl(s.color_secondary));
+  if (s.color_accent)    root.style.setProperty('--accent',    hexToHsl(s.color_accent));
+}
 
 // ─── Auth Modal ───────────────────────────────────────────────────────────────
 type AuthStep = 'email' | 'otp' | 'done';
@@ -513,7 +552,7 @@ function ShopDropdown({ onNavigate }: { onNavigate: (cat: Exclude<Category, 'All
 
 // ─── Shared Header ─────────────────────────────────────────────────────────────
 function Header({
-  itemCount, onCartOpen, user, onAuthOpen, onLogout, menuOpen, setMenuOpen,
+  itemCount, onCartOpen, user, onAuthOpen, onLogout, menuOpen, setMenuOpen, logoUrl,
 }: {
   itemCount: number;
   onCartOpen: () => void;
@@ -522,6 +561,7 @@ function Header({
   onLogout: () => void;
   menuOpen: boolean;
   setMenuOpen: (v: boolean) => void;
+  logoUrl?: string;
 }) {
   const [shopOpen, setShopOpen] = useState(false);
   const [mobileShopOpen, setMobileShopOpen] = useState(false);
@@ -553,15 +593,19 @@ function Header({
         </button>
 
         <Link href="/" className="group shrink-0" data-testid="link-home">
-          <div className="flex items-center gap-2.5">
-            <div className="relative grid size-10 place-items-center rounded-full border-2 border-accent bg-primary text-accent shadow-sm">
-              <Sparkles className="size-5" />
+          {logoUrl ? (
+            <img src={logoUrl} alt="Aggarwal Sweets" className="h-10 w-auto object-contain" />
+          ) : (
+            <div className="flex items-center gap-2.5">
+              <div className="relative grid size-10 place-items-center rounded-full border-2 border-accent bg-primary text-accent shadow-sm">
+                <Sparkles className="size-5" />
+              </div>
+              <div>
+                <div className="font-display text-xl font-bold leading-none tracking-tight">Aggarwal</div>
+                <div className="font-mono-ui mt-1 text-[9px] uppercase tracking-[.3em] text-secondary">Sweets · Sirsa</div>
+              </div>
             </div>
-            <div>
-              <div className="font-display text-xl font-bold leading-none tracking-tight">Aggarwal</div>
-              <div className="font-mono-ui mt-1 text-[9px] uppercase tracking-[.3em] text-secondary">Sweets · Sirsa</div>
-            </div>
-          </div>
+          )}
         </Link>
 
         {/* Desktop nav */}
@@ -762,15 +806,23 @@ const heroSlides = [
 
 function Hero({ onShop }: { onShop: () => void }) {
   const [activeSlide, setActiveSlide] = useState(0);
-  const slide = heroSlides[activeSlide];
+  const settings = useSiteSettings();
+  const slides: typeof heroSlides[number][] = (() => {
+    try {
+      const stored = settings.hero_slides ? JSON.parse(settings.hero_slides) : null;
+      if (Array.isArray(stored) && stored.length) return stored as typeof heroSlides[number][];
+    } catch { /* fall through */ }
+    return [...heroSlides];
+  })();
+  const slide = slides[activeSlide % slides.length];
 
   useEffect(() => {
-    const timer = window.setInterval(() => setActiveSlide(c => (c + 1) % heroSlides.length), 6500);
+    const timer = window.setInterval(() => setActiveSlide(c => (c + 1) % slides.length), 6500);
     return () => window.clearInterval(timer);
   }, []);
 
   const moveSlide = (dir: number) =>
-    setActiveSlide(c => (c + dir + heroSlides.length) % heroSlides.length);
+    setActiveSlide(c => (c + dir + slides.length) % slides.length);
 
   return (
     <section className="relative isolate overflow-hidden bg-primary text-primary-foreground">
@@ -864,19 +916,31 @@ function TrustStrip() {
 // ─── Category Rail ────────────────────────────────────────────────────────────
 function CategoryRail() {
   const [, navigate] = useLocation();
+  const settings = useSiteSettings();
+  const cats: { label: string; note: string; icon: typeof Gift; image: string }[] = (() => {
+    try {
+      const stored = settings.craving_categories ? JSON.parse(settings.craving_categories) : null;
+      if (Array.isArray(stored) && stored.length) {
+        return stored.map((c: { label: string; note: string; image: string }) => ({
+          ...c, icon: ICON_MAP[c.label] ?? Sparkles,
+        }));
+      }
+    } catch { /* fall through */ }
+    return DEFAULT_CRAVING_CATEGORIES;
+  })();
   return (
     <section className="mx-auto max-w-7xl px-5 py-14 sm:px-8 sm:py-20">
       <div className="mb-8 flex items-end justify-between">
         <div>
           <p className="font-mono-ui text-[10px] uppercase tracking-[.25em] text-secondary">Something for every mood</p>
-          <h2 className="mt-2 font-display text-3xl font-semibold sm:text-4xl">Browse by craving</h2>
+          <h2 className="mt-2 font-display text-3xl font-semibold sm:text-4xl">{settings.craving_section_title || 'Browse by craving'}</h2>
         </div>
         <Link href="/shop" className="hidden items-center gap-2 text-sm font-bold text-secondary sm:flex" data-testid="link-browse-all">
           Browse all <ArrowRight className="size-4" />
         </Link>
       </div>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        {categories.map(({ label, note, icon: Icon, image }, i) => (
+        {cats.map(({ label, note, icon: Icon, image }, i) => (
           <button
             key={label}
             onClick={() => navigate(`/shop/${label.toLowerCase()}`)}
@@ -1166,7 +1230,7 @@ function ShopPage({
     ? activeSubItem.subtitle
     : (category === 'All'
         ? 'Browse our full counter — sweets, namkeen, snacks, and gift boxes.'
-        : (categories.find(c => c.label === category)?.note ?? ''));
+        : (DEFAULT_CRAVING_CATEGORIES.find(c => c.label === category)?.note ?? ''));
 
   return (
     <div className="min-h-screen">
@@ -1234,6 +1298,14 @@ function ShopPage({
 
 // ─── Blog Page ────────────────────────────────────────────────────────────────
 function BlogPage() {
+  const [posts, setPosts] = useState<BlogPost[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    fetch(`${API}/blog`).then(r => r.json()).then((data: unknown[]) => {
+      if (Array.isArray(data)) setPosts(data.map((p: Record<string,unknown>) => ({ ...p, body: Array.isArray(p.body) ? p.body : [] })) as BlogPost[]);
+    }).catch(() => { setPosts(blogPosts); }).finally(() => setLoading(false));
+  }, []);
+  const displayPosts = loading ? [] : (posts.length > 0 ? posts : blogPosts);
   return (
     <div className="min-h-screen">
       <PageHero
@@ -1243,33 +1315,37 @@ function BlogPage() {
         subtitle="Heritage, craft, and the art of making sweets that carry meaning."
       />
       <div className="mx-auto max-w-7xl px-5 py-10 sm:px-8">
-        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-2">
-          {blogPosts.map((post, i) => (
-            <Link key={post.id} href={`/blog/${post.slug}`}
-              className={`group overflow-hidden rounded-2xl border border-border bg-background transition-all hover:-translate-y-1 hover:shadow-xl ${i === 0 ? 'sm:col-span-2' : ''}`}
-              data-testid={`blog-card-${post.slug}`}>
-              <div className={`relative overflow-hidden bg-muted ${i === 0 ? 'aspect-[2.5] sm:aspect-[3]' : 'aspect-[1.6]'}`}>
-                <img src={post.image} alt={post.title} className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105" />
-                <div className="absolute inset-0 bg-gradient-to-t from-primary/80 via-primary/20 to-transparent" />
-                <span className="absolute left-4 top-4 rounded-full bg-accent px-3 py-1 font-mono-ui text-[10px] font-bold uppercase tracking-wider text-accent-foreground">
-                  {post.category}
-                </span>
-              </div>
-              <div className="p-5">
-                <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
-                  <span>{post.date}</span>
-                  <span>·</span>
-                  <span className="flex items-center gap-1"><BookOpen className="size-3" /> {post.readTime} read</span>
+        {loading ? (
+          <div className="flex justify-center py-20"><Loader2 className="size-8 animate-spin text-muted-foreground" /></div>
+        ) : (
+          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-2">
+            {displayPosts.map((post, i) => (
+              <Link key={post.id} href={`/blog/${post.slug}`}
+                className={`group overflow-hidden rounded-2xl border border-border bg-background transition-all hover:-translate-y-1 hover:shadow-xl ${i === 0 ? 'sm:col-span-2' : ''}`}
+                data-testid={`blog-card-${post.slug}`}>
+                <div className={`relative overflow-hidden bg-muted ${i === 0 ? 'aspect-[2.5] sm:aspect-[3]' : 'aspect-[1.6]'}`}>
+                  <img src={post.image} alt={post.title} className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105" />
+                  <div className="absolute inset-0 bg-gradient-to-t from-primary/80 via-primary/20 to-transparent" />
+                  <span className="absolute left-4 top-4 rounded-full bg-accent px-3 py-1 font-mono-ui text-[10px] font-bold uppercase tracking-wider text-accent-foreground">
+                    {post.category}
+                  </span>
                 </div>
-                <h2 className="mt-2 font-display text-xl font-semibold leading-snug">{post.title}</h2>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">{post.excerpt}</p>
-                <span className="mt-4 flex items-center gap-1.5 text-xs font-bold text-secondary">
-                  Read more <ArrowRight className="size-3.5" />
-                </span>
-              </div>
-            </Link>
-          ))}
-        </div>
+                <div className="p-5">
+                  <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+                    <span>{post.date}</span>
+                    <span>·</span>
+                    <span className="flex items-center gap-1"><BookOpen className="size-3" /> {post.readTime} read</span>
+                  </div>
+                  <h2 className="mt-2 font-display text-xl font-semibold leading-snug">{post.title}</h2>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">{post.excerpt}</p>
+                  <span className="mt-4 flex items-center gap-1.5 text-xs font-bold text-secondary">
+                    Read more <ArrowRight className="size-3.5" />
+                  </span>
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1459,10 +1535,22 @@ function ProductDrawer({ product, onClose, onAdd }: { product: Product; onClose:
 }
 
 // ─── Cart Drawer ──────────────────────────────────────────────────────────────
-function CartDrawer({ cart, subtotal, updateQty, onClose, onCheckout, user, onAuthOpen }: {
+function CartDrawer({ cart, subtotal, updateQty, onClose, onCheckout, user, onAuthOpen, coupon, onApplyCoupon, onRemoveCoupon }: {
   cart: CartLine[]; subtotal: number; updateQty: (i: number, delta: number) => void;
   onClose: () => void; onCheckout: () => void; user: AuthUser | null; onAuthOpen: () => void;
+  coupon: AppliedCoupon | null; onApplyCoupon: (code: string) => Promise<string | null>; onRemoveCoupon: () => void;
 }) {
+  const [couponInput, setCouponInput] = useState('');
+  const [couponError, setCouponError] = useState('');
+  const [couponLoading, setCouponLoading] = useState(false);
+
+  const handleApplyCoupon = async () => {
+    if (!couponInput.trim()) return;
+    setCouponLoading(true); setCouponError('');
+    const err = await onApplyCoupon(couponInput.trim());
+    setCouponLoading(false);
+    if (err) { setCouponError(err); } else { setCouponInput(''); }
+  };
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-primary/40 backdrop-blur-sm" onMouseDown={onClose}>
       <div className="flex h-full w-full max-w-md flex-col bg-background shadow-2xl" onMouseDown={e => e.stopPropagation()}>
@@ -1507,7 +1595,34 @@ function CartDrawer({ cart, subtotal, updateQty, onClose, onCheckout, user, onAu
               ))}
             </div>
             <div className="border-t border-border bg-card p-5">
-              <div className="flex justify-between text-sm"><span>Subtotal</span><span className="font-mono-ui font-bold">{money(subtotal)}</span></div>
+              {/* Coupon code */}
+              {coupon ? (
+                <div className="mb-3 flex items-center justify-between rounded-xl border border-green-200 bg-green-50 px-3 py-2.5">
+                  <div className="flex items-center gap-2 text-green-700">
+                    <Tag className="size-3.5" />
+                    <span className="text-xs font-bold">{coupon.code} applied</span>
+                    <span className="text-xs">−{money(coupon.discount)}</span>
+                  </div>
+                  <button onClick={onRemoveCoupon} className="text-green-500 hover:text-green-700"><X className="size-3.5" /></button>
+                </div>
+              ) : (
+                <div className="mb-3">
+                  <div className="flex gap-2">
+                    <input
+                      value={couponInput} onChange={e => { setCouponInput(e.target.value.toUpperCase()); setCouponError(''); }}
+                      onKeyDown={e => e.key === 'Enter' && handleApplyCoupon()}
+                      placeholder="Coupon code" className="flex-1 rounded-xl border border-input px-3 py-2 text-xs font-mono-ui uppercase outline-none focus:ring-2 focus:ring-ring"
+                      data-testid="input-coupon" />
+                    <button onClick={handleApplyCoupon} disabled={couponLoading || !couponInput.trim()}
+                      className="rounded-xl bg-primary px-3 py-2 text-xs font-bold text-primary-foreground disabled:opacity-40">
+                      {couponLoading ? '…' : 'Apply'}
+                    </button>
+                  </div>
+                  {couponError && <p className="mt-1 text-[11px] text-red-500">{couponError}</p>}
+                </div>
+              )}
+              <div className="flex justify-between text-sm"><span>Subtotal</span><span className={`font-mono-ui font-bold ${coupon ? 'line-through text-muted-foreground text-xs' : ''}`}>{money(subtotal)}</span></div>
+              {coupon && <div className="flex justify-between text-sm font-bold text-green-700"><span>Total (after discount)</span><span className="font-mono-ui">{money(Math.max(0, subtotal - coupon.discount))}</span></div>}
               <p className="mt-2 text-xs text-muted-foreground">Delivery is free for orders over ₹799 in Sirsa.</p>
               {user ? (
                 <button onClick={onCheckout} className="mt-5 flex w-full items-center justify-center gap-2 rounded-full bg-secondary py-4 text-sm font-bold text-secondary-foreground" data-testid="button-proceed-checkout">
@@ -1706,18 +1821,24 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
   const [customers, setCustomers] = useState<CustomerRecord[]>([]);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [dataLoading, setDataLoading] = useState(true);
+  const [blogPosts, setBlogPosts] = useState<BlogPost[]>([]);
+  const [coupons, setCoupons] = useState<CouponCode[]>([]);
 
   const fetchAll = async () => {
     setDataLoading(true);
     try {
-      const [p, o, c] = await Promise.all([
+      const [p, o, c, b, coupList] = await Promise.all([
         fetch(`${API}/products`).then(r => r.json()),
         fetch(`${API}/orders`).then(r => r.json()),
         fetch(`${API}/customers`).then(r => r.json()),
+        fetch(`${API}/blog`).then(r => r.json()),
+        fetch(`${API}/coupons`).then(r => r.json()),
       ]);
       setCatalog(Array.isArray(p) ? p : []);
       setOrders(Array.isArray(o) ? o : []);
       setCustomers(Array.isArray(c) ? c : []);
+      setBlogPosts(Array.isArray(b) ? b.map((post: Record<string,unknown>) => ({ ...post, body: Array.isArray(post.body) ? post.body : [] })) : []);
+      setCoupons(Array.isArray(coupList) ? coupList : []);
     } finally { setDataLoading(false); }
   };
 
@@ -1753,6 +1874,8 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
     { key: 'products',  icon: Package,         label: 'Products' },
     { key: 'orders',    icon: ShoppingBag,     label: 'Orders' },
     { key: 'customers', icon: Users,           label: 'Customers' },
+    { key: 'blog',      icon: FileText,        label: 'Blog' },
+    { key: 'coupons',   icon: Tag,             label: 'Coupons' },
     { key: 'settings',  icon: Settings,        label: 'Settings' },
   ];
 
@@ -1843,6 +1966,8 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
           {section === 'products'  && <AdminSectionProducts  catalog={catalog} loading={dataLoading} onAdd={addProduct} onEdit={editProduct} onDelete={deleteProduct} />}
           {section === 'orders'    && <AdminSectionOrders    orders={orders}   loading={dataLoading} onStatusChange={updateOrderStatus} />}
           {section === 'customers' && <AdminSectionCustomers customers={customers} />}
+          {section === 'blog'      && <AdminSectionBlog      posts={blogPosts} onRefresh={fetchAll} />}
+          {section === 'coupons'   && <AdminSectionCoupons   coupons={coupons} onRefresh={fetchAll} />}
           {section === 'settings'  && <AdminSectionSettings  adminUser={adminUser} />}
         </main>
       </div>
@@ -1938,7 +2063,7 @@ function AdminSectionDashboard({ catalog, orders, customers, onNavigate }: {
 
 // ─── Admin · Products ─────────────────────────────────────────────────────────
 type ProductFormData = {
-  name: string; category: Exclude<Category, 'All'>; price: string; unit: string;
+  name: string; category: string; price: string; unit: string;
   badge: string; description: string; image: string;
   v1w: string; v1p: string; v2w: string; v2p: string; v3w: string; v3p: string;
 };
@@ -1959,7 +2084,17 @@ function AdminSectionProducts({ catalog, loading, onAdd, onEdit, onDelete }: {
   const [form, setForm] = useState<ProductFormData>(BLANK_FORM);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [filterCat, setFilterCat] = useState<Category>('All');
+  const [filterCat, setFilterCat] = useState('All');
+  const settings = useSiteSettings();
+  const dynamicCats: string[] = (() => {
+    try {
+      const stored = settings.craving_categories ? JSON.parse(settings.craving_categories) : null;
+      if (Array.isArray(stored) && stored.length) return stored.map((c: { label: string }) => c.label);
+    } catch { /* fall through */ }
+    return ['Mithai', 'Namkeen', 'Snacks', 'Gifting'];
+  })();
+  const allCats = ['All', ...dynamicCats];
+  const [imageTab, setImageTab] = useState<'url' | 'upload'>('url');
 
   const openAdd = () => { setForm(BLANK_FORM); setEditingId(null); setModalOpen(true); };
   const openEdit = (p: Product) => {
@@ -2017,8 +2152,8 @@ function AdminSectionProducts({ catalog, loading, onAdd, onEdit, onDelete }: {
             <Search className="size-4 text-muted-foreground" />
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search…" className="w-36 bg-transparent text-sm outline-none" />
           </div>
-          <div className="flex gap-1.5">
-            {(['All', 'Mithai', 'Namkeen', 'Snacks', 'Gifting'] as Category[]).map(c => (
+          <div className="flex flex-wrap gap-1.5">
+            {allCats.map(c => (
               <button key={c} onClick={() => setFilterCat(c)}
                 className={`rounded-full px-3 py-1.5 text-xs font-bold transition-colors ${filterCat === c ? 'bg-primary text-primary-foreground' : 'border border-border bg-background hover:bg-muted'}`}>
                 {c}
@@ -2093,7 +2228,7 @@ function AdminSectionProducts({ catalog, loading, onAdd, onEdit, onDelete }: {
                 <div>
                   <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Category *</label>
                   <select required value={form.category} onChange={f('category')} className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring">
-                    {(['Mithai', 'Namkeen', 'Snacks', 'Gifting'] as const).map(c => <option key={c}>{c}</option>)}
+                    {dynamicCats.map(c => <option key={c}>{c}</option>)}
                   </select>
                 </div>
               </div>
@@ -2104,22 +2239,43 @@ function AdminSectionProducts({ catalog, loading, onAdd, onEdit, onDelete }: {
                 </div>
                 <div>
                   <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Unit</label>
-                  <input value={form.unit} onChange={f('unit')} placeholder="250 gm" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                  <input list="unit-presets" value={form.unit} onChange={f('unit')} placeholder="250 gm" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                  <datalist id="unit-presets">{UNIT_PRESETS.map(u => <option key={u} value={u} />)}</datalist>
                 </div>
               </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Badge (optional)</label>
-                  <input value={form.badge} onChange={f('badge')} placeholder="Best seller" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+              <div>
+                <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Badge (optional)</label>
+                <input value={form.badge} onChange={f('badge')} placeholder="Best seller" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Product image</label>
+                <div className="mb-2 flex rounded-xl border border-border overflow-hidden">
+                  {(['url', 'upload'] as const).map(t => (
+                    <button key={t} type="button" onClick={() => setImageTab(t)}
+                      className={`flex-1 py-2 text-xs font-bold capitalize ${imageTab === t ? 'bg-primary text-primary-foreground' : 'bg-muted hover:bg-muted/80'}`}>
+                      {t === 'url' ? 'URL / preset' : 'Upload file'}
+                    </button>
+                  ))}
                 </div>
-                <div>
-                  <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Image</label>
-                  <select value={form.image} onChange={f('image')} className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring">
-                    <option value="/hero-mithai.jpg">Mithai (default)</option>
-                    <option value="/ladoo-plate.jpg">Ladoo plate</option>
-                    <option value="/namkeen-bowl.jpg">Namkeen bowl</option>
-                  </select>
-                </div>
+                {imageTab === 'url' ? (
+                  <div className="flex gap-2">
+                    <input value={form.image} onChange={f('image')} placeholder="https://… or /hero-mithai.jpg" className="flex-1 rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                    <select onChange={e => setForm(p => ({ ...p, image: e.target.value }))} className="rounded-xl border border-input px-3 py-2.5 text-xs outline-none">
+                      <option value="">Presets</option>
+                      <option value="/hero-mithai.jpg">Mithai</option>
+                      <option value="/ladoo-plate.jpg">Ladoo</option>
+                      <option value="/namkeen-bowl.jpg">Namkeen</option>
+                    </select>
+                  </div>
+                ) : (
+                  <input type="file" accept="image/*" onChange={e => {
+                    const file = e.target.files?.[0]; if (!file) return;
+                    const reader = new FileReader();
+                    reader.onloadend = () => setForm(p => ({ ...p, image: reader.result as string }));
+                    reader.readAsDataURL(file);
+                  }} className="w-full rounded-xl border border-input px-4 py-2.5 text-sm" />
+                )}
+                {form.image && <img src={form.image} alt="" className="mt-2 h-20 w-20 rounded-xl object-cover border border-border" />}
               </div>
               <div>
                 <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Description</label>
@@ -2431,6 +2587,165 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
         </form>
       </div>
 
+      {/* Logo */}
+      <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+        <h3 className="font-semibold">Store logo</h3>
+        <p className="mt-1 text-sm text-muted-foreground">Upload a logo image. Appears in the header instead of the text mark.</p>
+        <div className="mt-4 flex flex-col gap-3">
+          {storeInfo.logo_url && (
+            <div className="flex items-center gap-3">
+              <img src={storeInfo.logo_url} alt="Logo" className="h-14 rounded-xl border border-border object-contain bg-muted p-1" />
+              <button type="button" onClick={async () => {
+                await fetch(`${API}/settings/logo_url`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: '' }) });
+                setStoreInfo(s => ({ ...s, logo_url: '' }));
+                window.dispatchEvent(new Event('aggarwal-settings-updated'));
+              }} className="text-xs text-red-500 hover:underline">Remove logo</button>
+            </div>
+          )}
+          <input type="file" accept="image/*" onChange={async e => {
+            const file = e.target.files?.[0]; if (!file) return;
+            const reader = new FileReader();
+            reader.onloadend = async () => {
+              const b64 = reader.result as string;
+              await fetch(`${API}/settings/logo_url`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: b64 }) });
+              setStoreInfo(s => ({ ...s, logo_url: b64 }));
+              window.dispatchEvent(new Event('aggarwal-settings-updated'));
+            };
+            reader.readAsDataURL(file);
+          }} className="rounded-xl border border-input px-4 py-2.5 text-sm" />
+        </div>
+      </div>
+
+      {/* Brand colours */}
+      <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+        <h3 className="font-semibold">Brand colours</h3>
+        <p className="mt-1 text-sm text-muted-foreground">Changes apply instantly to the storefront.</p>
+        <div className="mt-4 grid grid-cols-3 gap-4">
+          {([
+            { key: 'color_primary',   label: 'Primary',   def: '#1a4434' },
+            { key: 'color_secondary', label: 'Secondary', def: '#c5402a' },
+            { key: 'color_accent',    label: 'Accent',    def: '#f0b90b' },
+          ] as { key: string; label: string; def: string }[]).map(({ key, label, def }) => (
+            <div key={key} className="flex flex-col items-center gap-2">
+              <label className="text-xs font-bold uppercase tracking-wider">{label}</label>
+              <input type="color" value={storeInfo[key] || def}
+                onChange={async e => {
+                  const val = e.target.value;
+                  setStoreInfo(s => ({ ...s, [key]: val }));
+                  const root = document.documentElement;
+                  const hsl = hexToHsl(val);
+                  if (key === 'color_primary') root.style.setProperty('--primary', hsl);
+                  if (key === 'color_secondary') root.style.setProperty('--secondary', hsl);
+                  if (key === 'color_accent') root.style.setProperty('--accent', hsl);
+                  await fetch(`${API}/settings/${key}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: val }) });
+                  window.dispatchEvent(new Event('aggarwal-settings-updated'));
+                }}
+                className="size-14 rounded-xl border-2 border-border cursor-pointer" />
+              <span className="font-mono-ui text-[10px] text-muted-foreground">{storeInfo[key] || def}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Hero slider config */}
+      <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+        <h3 className="font-semibold">Hero slider</h3>
+        <p className="mt-1 text-sm text-muted-foreground">Customise the homepage banner slides. Leave heading/highlight blank to use defaults.</p>
+        {(() => {
+          const defaultSlides = [...heroSlides];
+          const slides: typeof heroSlides[number][] = (() => {
+            try { const s = storeInfo.hero_slides ? JSON.parse(storeInfo.hero_slides) : null; return Array.isArray(s) ? s : defaultSlides; } catch { return defaultSlides; }
+          })();
+          const setSlide = async (idx: number, patch: Partial<typeof heroSlides[number]>) => {
+            const next = slides.map((s, i) => i === idx ? { ...s, ...patch } : s);
+            const val = JSON.stringify(next);
+            setStoreInfo(s => ({ ...s, hero_slides: val }));
+            await fetch(`${API}/settings/hero_slides`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: val }) });
+            window.dispatchEvent(new Event('aggarwal-settings-updated'));
+          };
+          return (
+            <div className="mt-4 space-y-4">
+              {slides.map((slide, idx) => (
+                <div key={idx} className="rounded-xl border border-border p-4 space-y-3">
+                  <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Slide {idx + 1}</p>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="text-[10px] font-bold uppercase tracking-wider">Eyebrow</label>
+                      <input value={slide.eyebrow} onChange={e => setSlide(idx, { eyebrow: e.target.value as never })} className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold uppercase tracking-wider">Heading</label>
+                      <input value={slide.heading} onChange={e => setSlide(idx, { heading: e.target.value as never })} className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold uppercase tracking-wider">Highlight word</label>
+                      <input value={slide.highlight} onChange={e => setSlide(idx, { highlight: e.target.value as never })} className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold uppercase tracking-wider">CTA button</label>
+                      <input value={slide.cta} onChange={e => setSlide(idx, { cta: e.target.value as never })} className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="text-[10px] font-bold uppercase tracking-wider">Description</label>
+                      <textarea rows={2} value={slide.description} onChange={e => setSlide(idx, { description: e.target.value as never })} className="mt-1 w-full resize-none rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+      </div>
+
+      {/* Craving section */}
+      <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+        <h3 className="font-semibold">Browse by craving section</h3>
+        <p className="mt-1 text-sm text-muted-foreground">Edit the category cards on the homepage. Also determines product category options.</p>
+        {(() => {
+          const defCats = DEFAULT_CRAVING_CATEGORIES.map(c => ({ label: c.label, note: c.note, image: c.image }));
+          const cats: { label: string; note: string; image: string }[] = (() => {
+            try { const s = storeInfo.craving_categories ? JSON.parse(storeInfo.craving_categories) : null; return Array.isArray(s) ? s : defCats; } catch { return defCats; }
+          })();
+          const setCats = async (next: typeof cats) => {
+            const val = JSON.stringify(next);
+            setStoreInfo(s => ({ ...s, craving_categories: val }));
+            await fetch(`${API}/settings/craving_categories`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: val }) });
+            window.dispatchEvent(new Event('aggarwal-settings-updated'));
+          };
+          return (
+            <div className="mt-4 space-y-3">
+              {cats.map((cat, idx) => (
+                <div key={idx} className="grid gap-2 rounded-xl border border-border p-3 sm:grid-cols-3">
+                  <div>
+                    <label className="text-[10px] font-bold uppercase tracking-wider">Category name</label>
+                    <input value={cat.label} onChange={e => { const next = cats.map((c, i) => i === idx ? { ...c, label: e.target.value } : c); setCats(next); }}
+                      className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold uppercase tracking-wider">Tagline</label>
+                    <input value={cat.note} onChange={e => { const next = cats.map((c, i) => i === idx ? { ...c, note: e.target.value } : c); setCats(next); }}
+                      className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                  </div>
+                  <div className="flex items-end gap-2">
+                    <div className="flex-1">
+                      <label className="text-[10px] font-bold uppercase tracking-wider">Image URL</label>
+                      <input value={cat.image} onChange={e => { const next = cats.map((c, i) => i === idx ? { ...c, image: e.target.value } : c); setCats(next); }}
+                        className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                    </div>
+                    <button type="button" onClick={() => setCats(cats.filter((_, i) => i !== idx))}
+                      className="mb-1 grid size-8 place-items-center rounded-lg border border-red-200 text-red-400 hover:bg-red-50"><Trash2 className="size-3.5" /></button>
+                  </div>
+                </div>
+              ))}
+              <button type="button" onClick={() => setCats([...cats, { label: 'New Category', note: 'Description here', image: '/hero-mithai.jpg' }])}
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border py-2.5 text-sm font-bold text-muted-foreground hover:bg-muted">
+                <Plus className="size-4" /> Add category
+              </button>
+            </div>
+          );
+        })()}
+      </div>
+
       {/* Danger zone */}
       <div className="rounded-2xl border border-red-200 bg-background p-6 shadow-sm">
         <h3 className="font-semibold text-red-600">Danger zone</h3>
@@ -2453,6 +2768,269 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
           ))}
           {dangerMsg && <p className={`rounded-xl px-4 py-2 text-xs font-bold ${msgCls(dangerMsg)}`}>{msgTxt(dangerMsg)}</p>}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Admin · Blog ─────────────────────────────────────────────────────────────
+function AdminSectionBlog({ posts, onRefresh }: { posts: BlogPost[]; onRefresh: () => void }) {
+  type BlogForm = { title: string; slug: string; excerpt: string; date: string; readTime: string; category: string; image: string; body: string };
+  const BLANK_BLOG: BlogForm = { title: '', slug: '', excerpt: '', date: new Date().toISOString().slice(0, 10), readTime: '3 min', category: 'Story', image: '/hero-mithai.jpg', body: '' };
+  const [modalOpen, setModalOpen] = useState(false);
+  const [form, setForm] = useState<BlogForm>(BLANK_BLOG);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [imageTab, setImageTab] = useState<'url' | 'upload'>('url');
+
+  const openAdd = () => { setForm(BLANK_BLOG); setEditingId(null); setImageTab('url'); setModalOpen(true); };
+  const openEdit = (p: BlogPost) => {
+    setForm({ title: p.title, slug: p.slug, excerpt: p.excerpt, date: p.date, readTime: p.readTime, category: p.category, image: p.image, body: Array.isArray(p.body) ? p.body.join('\n\n') : '' });
+    setEditingId(p.id); setImageTab('url'); setModalOpen(true);
+  };
+  const fi = (field: keyof BlogForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setForm(f => ({ ...f, [field]: e.target.value }));
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const bodyArr = form.body.split(/\n\n+/).map(s => s.trim()).filter(Boolean);
+    const payload = { ...form, body: bodyArr, slug: form.slug || form.title.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') };
+    setSaving(true);
+    try {
+      if (editingId) {
+        await fetch(`${API}/blog/${editingId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      } else {
+        await fetch(`${API}/blog`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, id: payload.slug + '-' + Date.now() }) });
+      }
+      setModalOpen(false); onRefresh();
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">{posts.length} post{posts.length !== 1 ? 's' : ''}</p>
+        <button onClick={openAdd} className="flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-bold text-primary-foreground shadow-sm">
+          <Plus className="size-4" /> New post
+        </button>
+      </div>
+
+      <div className="overflow-hidden rounded-2xl border border-border bg-background shadow-sm">
+        {posts.length === 0 ? (
+          <div className="py-16 text-center">
+            <FileText className="mx-auto size-8 text-muted-foreground/40" />
+            <p className="mt-3 text-sm text-muted-foreground">No blog posts yet. Add one to get started.</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {posts.map(p => (
+              <div key={p.id} className="flex items-center gap-4 px-5 py-4">
+                <img src={p.image} alt="" className="size-12 rounded-xl object-cover bg-muted shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold truncate">{p.title}</p>
+                  <p className="text-xs text-muted-foreground">{p.date} · {p.category} · {p.readTime}</p>
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  <button onClick={() => openEdit(p)} className="grid size-8 place-items-center rounded-lg border border-border text-muted-foreground hover:bg-muted"><Pencil className="size-3.5" /></button>
+                  <button onClick={() => setDeleteId(p.id)} className="grid size-8 place-items-center rounded-lg border border-red-200 text-red-400 hover:bg-red-50"><Trash2 className="size-3.5" /></button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {modalOpen && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-5 backdrop-blur-sm" onMouseDown={() => setModalOpen(false)}>
+          <div className="max-h-[92vh] w-full max-w-xl overflow-y-auto rounded-3xl bg-background shadow-2xl" onMouseDown={e => e.stopPropagation()}>
+            <div className="sticky top-0 flex items-center justify-between border-b border-border bg-background px-6 py-4">
+              <h3 className="font-display text-xl">{editingId ? 'Edit post' : 'New post'}</h3>
+              <button onClick={() => setModalOpen(false)} className="grid size-8 place-items-center rounded-full hover:bg-muted"><X className="size-4" /></button>
+            </div>
+            <form onSubmit={handleSave} className="space-y-4 px-6 py-5">
+              <div>
+                <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Title *</label>
+                <input required value={form.title} onChange={fi('title')} placeholder="Our Holi special" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Slug (URL)</label>
+                  <input value={form.slug} onChange={fi('slug')} placeholder="auto-generated-if-blank" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring font-mono-ui" />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Category</label>
+                  <input value={form.category} onChange={fi('category')} placeholder="Story" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                </div>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Date</label>
+                  <input type="date" value={form.date} onChange={fi('date')} className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Read time</label>
+                  <input value={form.readTime} onChange={fi('readTime')} placeholder="3 min" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                </div>
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Excerpt</label>
+                <textarea rows={2} value={form.excerpt} onChange={fi('excerpt')} placeholder="Short summary shown on the blog list…" className="w-full resize-none rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Image</label>
+                <div className="mb-2 flex rounded-xl border border-border overflow-hidden">
+                  {(['url', 'upload'] as const).map(t => (
+                    <button key={t} type="button" onClick={() => setImageTab(t)}
+                      className={`flex-1 py-2 text-xs font-bold capitalize ${imageTab === t ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}>
+                      {t === 'url' ? 'URL' : 'Upload'}
+                    </button>
+                  ))}
+                </div>
+                {imageTab === 'url' ? (
+                  <input value={form.image} onChange={fi('image')} placeholder="/hero-mithai.jpg or https://…" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                ) : (
+                  <input type="file" accept="image/*" onChange={e => {
+                    const file = e.target.files?.[0]; if (!file) return;
+                    const reader = new FileReader();
+                    reader.onloadend = () => setForm(f => ({ ...f, image: reader.result as string }));
+                    reader.readAsDataURL(file);
+                  }} className="w-full rounded-xl border border-input px-4 py-2.5 text-sm" />
+                )}
+                {form.image && <img src={form.image} alt="" className="mt-2 h-20 w-20 rounded-xl object-cover border border-border" />}
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Body (separate paragraphs with a blank line)</label>
+                <textarea rows={8} value={form.body} onChange={fi('body')} placeholder="First paragraph…&#10;&#10;Second paragraph…" className="w-full resize-y rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+              </div>
+              <div className="flex gap-3 pt-2 pb-1">
+                <button type="button" onClick={() => setModalOpen(false)} className="flex-1 rounded-xl border border-border py-3 text-sm font-bold">Cancel</button>
+                <button type="submit" disabled={saving} className="flex-1 rounded-xl bg-primary py-3 text-sm font-bold text-primary-foreground disabled:opacity-60">{saving ? 'Saving…' : editingId ? 'Save changes' : 'Publish post'}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {deleteId && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-5 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-3xl bg-background p-8 text-center shadow-2xl">
+            <div className="mx-auto grid size-14 place-items-center rounded-full bg-red-100 text-red-500"><Trash2 className="size-6" /></div>
+            <h3 className="mt-4 font-display text-2xl">Delete post?</h3>
+            <p className="mt-2 text-sm text-muted-foreground">This removes the post permanently.</p>
+            <div className="mt-6 flex gap-3">
+              <button onClick={() => setDeleteId(null)} className="flex-1 rounded-xl border border-border py-3 text-sm font-bold">Cancel</button>
+              <button onClick={async () => { await fetch(`${API}/blog/${deleteId}`, { method: 'DELETE' }); setDeleteId(null); onRefresh(); }} className="flex-1 rounded-xl bg-red-500 py-3 text-sm font-bold text-white">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Admin · Coupons ──────────────────────────────────────────────────────────
+function AdminSectionCoupons({ coupons, onRefresh }: { coupons: CouponCode[]; onRefresh: () => void }) {
+  type CouponForm = { code: string; type: 'percent' | 'amount'; value: string; minOrder: string; description: string };
+  const BLANK_COUPON: CouponForm = { code: '', type: 'percent', value: '', minOrder: '', description: '' };
+  const [form, setForm] = useState<CouponForm>(BLANK_COUPON);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleAdd = async (e: React.FormEvent) => {
+    e.preventDefault(); setError('');
+    if (!form.code.trim()) { setError('Coupon code is required'); return; }
+    if (!form.value || Number(form.value) <= 0) { setError('Value must be greater than 0'); return; }
+    setSaving(true);
+    try {
+      const res = await fetch(`${API}/coupons`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: form.code.toUpperCase(), type: form.type, value: Number(form.value), minOrder: Number(form.minOrder) || 0, description: form.description }),
+      });
+      if (!res.ok) { const e = await res.json(); setError(e.error ?? 'Failed to create coupon'); return; }
+      setForm(BLANK_COUPON); onRefresh();
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="space-y-5">
+      {/* Add coupon form */}
+      <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+        <h3 className="font-semibold">Create coupon code</h3>
+        <form onSubmit={handleAdd} className="mt-4 space-y-3">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Code *</label>
+              <input required value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value.toUpperCase() }))} placeholder="SWEET10" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm font-mono-ui uppercase outline-none focus:ring-2 focus:ring-ring" />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Type</label>
+              <select value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value as 'percent' | 'amount' }))} className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring">
+                <option value="percent">Percentage off (%)</option>
+                <option value="amount">Fixed amount (₹)</option>
+              </select>
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">{form.type === 'percent' ? 'Discount %' : 'Discount ₹'} *</label>
+              <input required type="number" min="1" max={form.type === 'percent' ? 100 : undefined} value={form.value} onChange={e => setForm(f => ({ ...f, value: e.target.value }))} placeholder={form.type === 'percent' ? '10' : '50'} className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Min. order (₹)</label>
+              <input type="number" min="0" value={form.minOrder} onChange={e => setForm(f => ({ ...f, minOrder: e.target.value }))} placeholder="0 = no minimum" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+            </div>
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Description (for customers)</label>
+            <input value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Get 10% off on all sweets!" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+          </div>
+          {error && <p className="rounded-xl bg-red-100 px-4 py-2 text-xs font-bold text-red-600">{error}</p>}
+          <button type="submit" disabled={saving} className="rounded-xl bg-primary px-5 py-2.5 text-sm font-bold text-primary-foreground disabled:opacity-60">
+            {saving ? 'Creating…' : 'Create coupon'}
+          </button>
+        </form>
+      </div>
+
+      {/* Coupons list */}
+      <div className="overflow-hidden rounded-2xl border border-border bg-background shadow-sm">
+        {coupons.length === 0 ? (
+          <div className="py-16 text-center">
+            <Percent className="mx-auto size-8 text-muted-foreground/40" />
+            <p className="mt-3 text-sm text-muted-foreground">No coupon codes yet. Create one above.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-border bg-muted/40">
+                  {['Code', 'Discount', 'Min. Order', 'Description', 'Status', 'Actions'].map(h => (
+                    <th key={h} className="whitespace-nowrap px-5 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-muted-foreground">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {coupons.map(c => (
+                  <tr key={c.code} className="transition-colors hover:bg-muted/30">
+                    <td className="px-5 py-3 font-mono-ui text-sm font-bold">{c.code}</td>
+                    <td className="px-5 py-3 text-sm">{c.type === 'percent' ? `${c.value}%` : `₹${c.value}`} off</td>
+                    <td className="px-5 py-3 text-sm text-muted-foreground">{c.minOrder > 0 ? `₹${c.minOrder}` : '—'}</td>
+                    <td className="px-5 py-3 text-sm text-muted-foreground max-w-[200px] truncate">{c.description || '—'}</td>
+                    <td className="px-5 py-3">
+                      <button onClick={async () => { await fetch(`${API}/coupons/${c.code}/toggle`, { method: 'PUT' }); onRefresh(); }}
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${c.active ? 'bg-green-100 text-green-700' : 'bg-muted text-muted-foreground'}`}>
+                        {c.active ? 'Active' : 'Inactive'}
+                      </button>
+                    </td>
+                    <td className="px-5 py-3">
+                      <button onClick={async () => { await fetch(`${API}/coupons/${c.code}`, { method: 'DELETE' }); onRefresh(); }}
+                        className="grid size-8 place-items-center rounded-lg border border-red-200 text-red-400 hover:bg-red-50"><Trash2 className="size-3.5" /></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -2777,15 +3355,30 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
   const [authOpen, setAuthOpen] = useState(false);
   const [pendingCheckout, setPendingCheckout] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [siteSettings, setSiteSettings] = useState<Record<string, string>>({});
+  const [coupon, setCoupon] = useState<AppliedCoupon | null>(null);
 
   useEffect(() => { localStorage.setItem('aggarwal-cart', JSON.stringify(cart)); }, [cart]);
   useEffect(() => { localStorage.setItem('aggarwal-wishlist', JSON.stringify(wishlist)); }, [wishlist]);
+
+  // Fetch settings & apply brand colors
+  const fetchSettings = () => {
+    fetch(`${API}/settings`).then(r => r.json()).then((s: Record<string, string>) => {
+      setSiteSettings(s); applyBrandColors(s);
+    }).catch(() => {});
+  };
   // Fetch catalog from DB on mount; refresh when admin makes changes
   useEffect(() => {
+    fetchSettings();
     apiFetchCatalog().then(setCatalog).catch(() => {});
     const refresh = () => apiFetchCatalog().then(setCatalog).catch(() => {});
+    const settingsRefresh = () => fetchSettings();
     window.addEventListener('aggarwal-catalog-updated', refresh);
-    return () => window.removeEventListener('aggarwal-catalog-updated', refresh);
+    window.addEventListener('aggarwal-settings-updated', settingsRefresh);
+    return () => {
+      window.removeEventListener('aggarwal-catalog-updated', refresh);
+      window.removeEventListener('aggarwal-settings-updated', settingsRefresh);
+    };
   }, []);
 
   const addToCart = (product: Product, variant = defaultVariant(product)) => {
@@ -2803,6 +3396,21 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
     setWishlist(curr => curr.includes(id) ? curr.filter(i => i !== id) : [...curr, id]);
   const itemCount = cart.reduce((s, l) => s + l.quantity, 0);
   const subtotal = cart.reduce((s, l) => s + l.variant.price * l.quantity, 0);
+  const discount = coupon?.discount ?? 0;
+  const finalTotal = Math.max(0, subtotal - discount);
+
+  const handleApplyCoupon = async (code: string): Promise<string | null> => {
+    try {
+      const res = await fetch(`${API}/coupons/validate`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, subtotal }),
+      });
+      const data = await res.json();
+      if (!res.ok) return data.error ?? 'Invalid coupon';
+      setCoupon({ code: code.toUpperCase(), discount: data.discount });
+      return null;
+    } catch { return 'Could not validate coupon. Please try again.'; }
+  };
 
   const handleLogout = () => {
     localStorage.removeItem('aggarwal-user');
@@ -2839,44 +3447,50 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
   };
 
   return (
-    <div className="min-h-[100dvh] overflow-x-hidden">
-      <PromoMarquee />
-      <Header
-        itemCount={itemCount}
-        onCartOpen={() => setCartOpen(true)}
-        user={user}
-        onAuthOpen={() => setAuthOpen(true)}
-        onLogout={handleLogout}
-        menuOpen={menuOpen}
-        setMenuOpen={setMenuOpen}
-      />
-      <BenefitMarquee />
-
-      {children(shellProps)}
-
-      <Footer />
-      <FloatingButtons />
-
-      {detail && <ProductDrawer product={detail} onClose={() => setDetail(null)} onAdd={addToCart} />}
-      {cartOpen && (
-        <CartDrawer
-          cart={cart} subtotal={subtotal} updateQty={updateQty}
-          onClose={() => setCartOpen(false)}
-          onCheckout={handleProceedCheckout}
+    <SiteSettingsContext.Provider value={siteSettings}>
+      <div className="min-h-[100dvh] overflow-x-hidden">
+        <PromoMarquee />
+        <Header
+          itemCount={itemCount}
+          onCartOpen={() => setCartOpen(true)}
           user={user}
-          onAuthOpen={() => { setCartOpen(false); setPendingCheckout(true); setAuthOpen(true); }}
+          onAuthOpen={() => setAuthOpen(true)}
+          onLogout={handleLogout}
+          menuOpen={menuOpen}
+          setMenuOpen={setMenuOpen}
+          logoUrl={siteSettings.logo_url}
         />
-      )}
-      {checkout && (
-        <Checkout
-          subtotal={subtotal} cart={cart}
-          onClose={() => setCheckout(false)}
-          onDone={(_order) => { setCheckout(false); setOrdered(true); setCart([]); }}
-        />
-      )}
-      {ordered && <OrderConfirmation onClose={() => setOrdered(false)} />}
-      {authOpen && <AuthModal onClose={() => { setAuthOpen(false); setPendingCheckout(false); }} onLogin={handleLogin} />}
-    </div>
+        <BenefitMarquee />
+
+        {children(shellProps)}
+
+        <Footer />
+        <FloatingButtons />
+
+        {detail && <ProductDrawer product={detail} onClose={() => setDetail(null)} onAdd={addToCart} />}
+        {cartOpen && (
+          <CartDrawer
+            cart={cart} subtotal={subtotal} updateQty={updateQty}
+            onClose={() => setCartOpen(false)}
+            onCheckout={handleProceedCheckout}
+            user={user}
+            onAuthOpen={() => { setCartOpen(false); setPendingCheckout(true); setAuthOpen(true); }}
+            coupon={coupon}
+            onApplyCoupon={handleApplyCoupon}
+            onRemoveCoupon={() => setCoupon(null)}
+          />
+        )}
+        {checkout && (
+          <Checkout
+            subtotal={finalTotal} cart={cart}
+            onClose={() => setCheckout(false)}
+            onDone={(_order) => { setCheckout(false); setOrdered(true); setCart([]); setCoupon(null); }}
+          />
+        )}
+        {ordered && <OrderConfirmation onClose={() => setOrdered(false)} />}
+        {authOpen && <AuthModal onClose={() => { setAuthOpen(false); setPendingCheckout(false); }} onLogin={handleLogin} />}
+      </div>
+    </SiteSettingsContext.Provider>
   );
 }
 
@@ -2905,8 +3519,24 @@ function HomePage(props: ShellChildProps) {
 // ─── Blog Post Page ───────────────────────────────────────────────────────────
 function BlogPostPage() {
   const params = useParams<{ slug: string }>();
-  const post = blogPosts.find(p => p.slug === params.slug);
   const [, navigate] = useLocation();
+  const [post, setPost] = useState<BlogPost | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    fetch(`${API}/blog`).then(r => r.json()).then((data: unknown[]) => {
+      if (Array.isArray(data)) {
+        const found = (data as Record<string,unknown>[]).find(p => p.slug === params.slug);
+        if (found) { setPost({ ...found, body: Array.isArray(found.body) ? found.body : [] } as BlogPost); return; }
+      }
+      // Fallback to static
+      const staticPost = blogPosts.find(p => p.slug === params.slug);
+      if (staticPost) setPost(staticPost);
+    }).catch(() => {
+      const staticPost = blogPosts.find(p => p.slug === params.slug);
+      if (staticPost) setPost(staticPost);
+    }).finally(() => setLoading(false));
+  }, [params.slug]);
+  if (loading) return <div className="flex min-h-screen items-center justify-center"><Loader2 className="size-8 animate-spin text-muted-foreground" /></div>;
   if (!post) return <NotFound />;
   return (
     <div className="min-h-screen">
