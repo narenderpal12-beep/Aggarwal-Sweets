@@ -1086,14 +1086,19 @@ function CategoryRail() {
 
 // ─── Product Card (with weight chip selector) ─────────────────────────────────
 function ProductCard({
-  product, wished, onWishlist, onDetail, onAdd,
+  product, wished, onWishlist, onDetail, onAdd, shagunProductId, onSetShagun,
 }: {
   product: Product; wished: boolean;
   onWishlist: (id: string) => void;
   onDetail: (p: Product) => void;
   onAdd: (p: Product, variant?: ProductVariant) => void;
+  shagunProductId?: string | null;
+  onSetShagun?: (id: string | null) => void;
 }) {
   const [selectedVariant, setSelectedVariant] = useState<ProductVariant>(defaultVariant(product));
+  const isShagun = shagunProductId === product.id;
+  // Hide the toggle for the shagun-box wrapper product itself
+  const canBeShagun = product.id !== 'shagun-box';
 
   // Unique weights for this product
   const weights = Array.from(new Set(product.variants.map(v => v.weight)));
@@ -1105,12 +1110,17 @@ function ProductCard({
   };
 
   return (
-    <article className="group relative overflow-hidden rounded-2xl border border-border bg-background transition-all hover:-translate-y-1 hover:shadow-xl" data-testid={`card-product-${product.id}`}>
+    <article className={`group relative overflow-hidden rounded-2xl border bg-background transition-all hover:-translate-y-1 hover:shadow-xl ${isShagun ? 'border-accent shadow-md ring-1 ring-accent/40' : 'border-border'}`} data-testid={`card-product-${product.id}`}>
       <div className="relative aspect-square cursor-pointer overflow-hidden bg-muted" onClick={() => onDetail(product)}>
         <img src={product.image} alt={product.name} className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105" />
         {product.badge && (
           <span className="absolute left-3 top-3 rounded-full bg-accent px-2.5 py-1 font-mono-ui text-[9px] font-bold uppercase tracking-wider text-accent-foreground">
             {product.badge}
+          </span>
+        )}
+        {isShagun && (
+          <span className="absolute left-3 bottom-3 rounded-full bg-accent/90 px-2.5 py-1 font-mono-ui text-[9px] font-bold uppercase tracking-wider text-accent-foreground flex items-center gap-1">
+            <Gift className="size-2.5" /> Shagun Box
           </span>
         )}
         <button
@@ -1160,6 +1170,16 @@ function ProductCard({
             <Plus className="size-3.5" /> Add to box
           </button>
         </div>
+        {canBeShagun && onSetShagun && (
+          <button
+            onClick={() => onSetShagun(isShagun ? null : product.id)}
+            className={`mt-2 flex w-full items-center justify-center gap-1.5 rounded-full border py-2 text-[10px] font-bold uppercase tracking-wide transition-colors ${isShagun ? 'border-accent bg-accent text-accent-foreground' : 'border-dashed border-accent/50 text-accent/70 hover:border-accent hover:text-accent'}`}
+            data-testid={`button-shagun-${product.id}`}
+          >
+            <Gift className="size-3" />
+            {isShagun ? '✓ Selected as Shagun Box' : 'Set as Shagun Box'}
+          </button>
+        )}
       </div>
     </article>
   );
@@ -1167,12 +1187,14 @@ function ProductCard({
 
 // ─── Shop Section (used on home) ──────────────────────────────────────────────
 function ShopSection({
-  products: items, wishlist, onWishlist, onDetail, onAdd,
+  products: items, wishlist, onWishlist, onDetail, onAdd, shagunProductId, onSetShagun,
 }: {
   products: Product[]; wishlist: string[];
   onWishlist: (id: string) => void;
   onDetail: (p: Product) => void;
   onAdd: (p: Product, variant?: ProductVariant) => void;
+  shagunProductId?: string | null;
+  onSetShagun?: (id: string | null) => void;
 }) {
   const [category, setCategory] = useState<Category>('All');
   const [query, setQuery] = useState('');
@@ -1226,7 +1248,8 @@ function ShopSection({
           <div className="mt-8 grid grid-cols-2 gap-3 sm:gap-5 md:grid-cols-3 lg:grid-cols-4">
             {filtered.map(product => (
               <ProductCard key={product.id} product={product} wished={wishlist.includes(product.id)}
-                onWishlist={onWishlist} onDetail={onDetail} onAdd={onAdd} />
+                onWishlist={onWishlist} onDetail={onDetail} onAdd={onAdd}
+                shagunProductId={shagunProductId} onSetShagun={onSetShagun} />
             ))}
           </div>
         ) : (
@@ -1477,7 +1500,15 @@ function BlogPage() {
 }
 
 // ─── Gifting Section ──────────────────────────────────────────────────────────
-function GiftingSection({ products: items, addToCart }: { products: Product[]; addToCart: (p: Product) => void }) {
+function GiftingSection({ products: items, addToCart, shagunProductId }: { products: Product[]; addToCart: (p: Product, v?: ProductVariant) => void; shagunProductId?: string | null }) {
+  const shagunProduct = shagunProductId ? items.find(p => p.id === shagunProductId) : null;
+  const shagunWrapper = items.find(p => p.id === 'shagun-box');
+
+  const handleAddShagun = () => {
+    if (shagunWrapper) addToCart(shagunWrapper);
+    if (shagunProduct) addToCart(shagunProduct);
+  };
+
   return (
     <section id="gifting" className="scroll-mt-20 bg-secondary text-secondary-foreground">
       <div className="mx-auto grid max-w-7xl items-center gap-8 px-5 py-14 sm:px-8 sm:py-20 lg:grid-cols-[.9fr_1.1fr]">
@@ -1485,14 +1516,37 @@ function GiftingSection({ products: items, addToCart }: { products: Product[]; a
           <p className="font-mono-ui text-[10px] uppercase tracking-[.25em] text-accent">For the big little moments</p>
           <h2 className="mt-3 max-w-lg font-display text-4xl leading-tight sm:text-5xl">Don't just send a gift.<br /><em className="font-normal text-accent">Send a feeling.</em></h2>
           <p className="mt-5 max-w-md text-sm leading-7 text-secondary-foreground/75">From a first visit to a fiftieth anniversary, our boxes carry the warmth of your home — even when home is a few cities away.</p>
-          <button onClick={() => { const shagun = items.find(p => p.id === 'shagun-box'); if (shagun) addToCart(shagun); }} className="mt-7 inline-flex items-center gap-3 rounded-full bg-accent px-6 py-3.5 text-sm font-bold text-accent-foreground" data-testid="button-add-shagun">
-            <Gift className="size-4" /> Add Shagun Box <ArrowRight className="size-4" />
+          {shagunProduct ? (
+            <div className="mt-5 inline-flex items-center gap-2.5 rounded-2xl border border-accent/30 bg-secondary-foreground/5 px-4 py-2.5">
+              <img src={shagunProduct.image} alt={shagunProduct.name} className="size-10 rounded-lg object-cover" />
+              <div>
+                <p className="font-mono-ui text-[9px] uppercase tracking-wider text-accent">Your Shagun Box contains</p>
+                <p className="font-display text-sm font-semibold text-secondary-foreground">{shagunProduct.name}</p>
+              </div>
+            </div>
+          ) : (
+            <p className="mt-5 inline-flex items-center gap-2 rounded-2xl border border-dashed border-accent/40 px-4 py-2.5 font-mono-ui text-[10px] uppercase tracking-wider text-accent/70">
+              <Gift className="size-3.5" /> Choose a product below to personalise
+            </p>
+          )}
+          <button
+            onClick={handleAddShagun}
+            className="mt-5 inline-flex items-center gap-3 rounded-full bg-accent px-6 py-3.5 text-sm font-bold text-accent-foreground"
+            data-testid="button-add-shagun"
+          >
+            <Gift className="size-4" />
+            {shagunProduct ? `Add Shagun Box with ${shagunProduct.name}` : 'Add Shagun Box'}
+            <ArrowRight className="size-4" />
           </button>
         </div>
         <div className="relative aspect-[1.45] overflow-hidden rounded-[2rem] border border-accent/30">
-          <img src="/hero-mithai.jpg" alt="Festive gift box" className="h-full w-full object-cover" />
+          <img
+            src={shagunProduct?.image ?? '/hero-mithai.jpg'}
+            alt={shagunProduct ? `${shagunProduct.name} in Shagun Box` : 'Festive gift box'}
+            className="h-full w-full object-cover transition-all duration-500"
+          />
           <div className="absolute bottom-4 left-4 rounded-xl bg-primary/90 px-4 py-3 text-primary-foreground backdrop-blur">
-            <p className="font-display text-lg">The Golden Edit</p>
+            <p className="font-display text-lg">{shagunProduct?.name ?? 'The Golden Edit'}</p>
             <p className="mt-1 font-mono-ui text-[10px] uppercase tracking-wider text-accent">Wrapped with a note</p>
           </div>
         </div>
@@ -1705,6 +1759,11 @@ function CartDrawer({ cart, subtotal, updateQty, onClose, onCheckout, user, onAu
                       <div>
                         <p className="font-display text-lg">{line.product.name}</p>
                         <p className="text-xs text-muted-foreground">{variantLabel(line.variant)}</p>
+                        {line.product.id === 'shagun-box' && (
+                          <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-accent/15 px-2 py-0.5 font-mono-ui text-[9px] font-bold uppercase tracking-wider text-accent">
+                            <Gift className="size-2.5" /> Shagun Box
+                          </span>
+                        )}
                       </div>
                       <p className="font-mono-ui text-xs font-bold whitespace-nowrap">{money(line.variant.price * line.quantity)}</p>
                     </div>
@@ -3796,6 +3855,8 @@ type ShellChildProps = {
   onAdd: (p: Product, v?: ProductVariant) => void;
   onAuthOpen: () => void;
   onLogout: () => void;
+  shagunProductId: string | null;
+  onSetShagun: (id: string | null) => void;
 };
 type ShellRenderProp = (props: ShellChildProps) => React.ReactNode;
 
@@ -3818,6 +3879,7 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [siteSettings, setSiteSettings] = useState<Record<string, string>>({});
   const [coupon, setCoupon] = useState<AppliedCoupon | null>(null);
+  const [shagunProductId, setShagunProductId] = useState<string | null>(null);
 
   useEffect(() => { localStorage.setItem('aggarwal-cart', JSON.stringify(cart)); }, [cart]);
   useEffect(() => { localStorage.setItem('aggarwal-wishlist', JSON.stringify(wishlist)); }, [wishlist]);
@@ -3906,6 +3968,8 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
     onAdd: addToCart,
     onAuthOpen: () => setAuthOpen(true),
     onLogout: handleLogout,
+    shagunProductId,
+    onSetShagun: (id) => setShagunProductId(prev => prev === id ? null : id),
   };
 
   return (
@@ -3959,7 +4023,7 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
 
 // ─── Home Page ────────────────────────────────────────────────────────────────
 function HomePage(props: ShellChildProps) {
-  const { catalog, wishlist, onWishlist, onDetail, onAdd, user } = props;
+  const { catalog, wishlist, onWishlist, onDetail, onAdd, user, shagunProductId, onSetShagun } = props;
   const [newsletter, setNewsletter] = useState('');
   const [newsletterDone, setNewsletterDone] = useState(false);
 
@@ -3968,8 +4032,8 @@ function HomePage(props: ShellChildProps) {
       <Hero onShop={() => document.getElementById('shop')?.scrollIntoView({ behavior: 'smooth' })} />
       <TrustStrip />
       <CategoryRail />
-      <ShopSection products={catalog} wishlist={wishlist} onWishlist={onWishlist} onDetail={onDetail} onAdd={onAdd} />
-      <GiftingSection products={catalog} addToCart={onAdd} />
+      <ShopSection products={catalog} wishlist={wishlist} onWishlist={onWishlist} onDetail={onDetail} onAdd={onAdd} shagunProductId={shagunProductId} onSetShagun={onSetShagun} />
+      <GiftingSection products={catalog} addToCart={onAdd} shagunProductId={shagunProductId} />
       <Story />
       <Newsletter
         value={newsletter} setValue={setNewsletter} done={newsletterDone}
