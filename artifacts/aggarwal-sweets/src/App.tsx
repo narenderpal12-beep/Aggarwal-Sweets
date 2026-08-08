@@ -509,19 +509,34 @@ function AuthModal({ onClose, onLogin }: { onClose: () => void; onLogin: (user: 
 }
 
 // ─── Dropdown Nav ─────────────────────────────────────────────────────────────
-function ShopDropdown({ onNavigate }: { onNavigate: (cat: Exclude<Category, 'All'>, slug?: string) => void }) {
-  const [hoveredCat, setHoveredCat] = useState<NavCategory>(navCategories[0]);
+function ShopDropdown({ onNavigate }: { onNavigate: (cat: string, slug?: string) => void }) {
+  const settings = useSiteSettings();
+  type DisplayCat = { label: string; subs: NavSubItem[] };
+  const displayCats: DisplayCat[] = (() => {
+    try {
+      const stored = settings.craving_categories ? JSON.parse(settings.craving_categories) : null;
+      if (Array.isArray(stored) && stored.length) {
+        return (stored as { label: string }[]).map(dc => {
+          const found = navCategories.find(nc => nc.label.toLowerCase() === dc.label.toLowerCase());
+          return found ?? { label: dc.label, subs: [] };
+        });
+      }
+    } catch { /* fall through */ }
+    return navCategories as DisplayCat[];
+  })();
+  const [hoveredLabel, setHoveredLabel] = useState('');
+  const hoveredCat = displayCats.find(c => c.label === hoveredLabel) ?? displayCats[0] ?? navCategories[0];
 
   return (
     <div className="absolute left-0 top-full z-50 mt-1 flex overflow-hidden rounded-2xl border border-border bg-background shadow-2xl"
       style={{ minWidth: 560 }}>
       {/* Left: category list */}
       <div className="w-52 border-r border-border bg-muted/40 py-3">
-        {navCategories.map(cat => (
+        {displayCats.map(cat => (
           <button
             key={cat.label}
-            onMouseEnter={() => setHoveredCat(cat)}
-            onClick={() => onNavigate(cat.subs[0].category)}
+            onMouseEnter={() => setHoveredLabel(cat.label)}
+            onClick={() => onNavigate(cat.label, cat.subs[0]?.slug)}
             className={`flex w-full items-center justify-between px-5 py-3 text-left text-sm font-semibold transition-colors ${hoveredCat.label === cat.label ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
             data-testid={`nav-category-${cat.label.toLowerCase()}`}
           >
@@ -530,21 +545,30 @@ function ShopDropdown({ onNavigate }: { onNavigate: (cat: Exclude<Category, 'All
           </button>
         ))}
       </div>
-      {/* Right: subcategories */}
+      {/* Right: subcategories or browse link */}
       <div className="flex-1 py-3">
         <p className="px-5 py-2 font-mono-ui text-[9px] uppercase tracking-widest text-muted-foreground">
           {hoveredCat.label}
         </p>
-        {hoveredCat.subs.map(sub => (
+        {hoveredCat.subs.length > 0 ? (
+          hoveredCat.subs.map(sub => (
+            <button
+              key={sub.label}
+              onClick={() => onNavigate(sub.category, sub.slug)}
+              className="flex w-full items-center px-5 py-3 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              data-testid={`nav-sub-${sub.label.toLowerCase().replace(/\s+/g, '-')}`}
+            >
+              {sub.label}
+            </button>
+          ))
+        ) : (
           <button
-            key={sub.label}
-            onClick={() => onNavigate(sub.category, sub.slug)}
-            className="flex w-full items-center px-5 py-3 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            data-testid={`nav-sub-${sub.label.toLowerCase().replace(/\s+/g, '-')}`}
+            onClick={() => onNavigate(hoveredCat.label)}
+            className="flex w-full items-center gap-2 px-5 py-3 text-left text-sm font-semibold text-secondary transition-colors hover:bg-muted"
           >
-            {sub.label}
+            <ArrowRight className="size-4" /> Browse all {hoveredCat.label}
           </button>
-        ))}
+        )}
       </div>
     </div>
   );
@@ -579,7 +603,8 @@ function Header({
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  const handleNavCategory = (cat: Exclude<Category, 'All'>, slug?: string) => {
+  const settings = useSiteSettings();
+  const handleNavCategory = (cat: string, slug?: string) => {
     setShopOpen(false);
     setMenuOpen(false);
     navigate(`/shop/${cat.toLowerCase()}${slug ? `?sub=${slug}` : ''}`);
@@ -653,20 +678,42 @@ function Header({
               </button>
               {mobileShopOpen && (
                 <div className="ml-3 border-l border-border pl-4">
-                  {navCategories.map(cat => (
-                    <div key={cat.label} className="mb-2">
-                      <p className="py-1 text-xs font-bold uppercase tracking-wider text-muted-foreground">{cat.label}</p>
-                      {cat.subs.map(sub => (
-                        <button
-                          key={sub.label}
-                          onClick={() => { handleNavCategory(sub.category, sub.slug); setMobileShopOpen(false); setMenuOpen(false); }}
-                          className="block w-full py-1.5 text-left text-sm text-muted-foreground hover:text-foreground"
-                        >
-                          {sub.label}
-                        </button>
-                      ))}
-                    </div>
-                  ))}
+                  {(() => {
+                    type MobileCat = { label: string; subs: NavSubItem[] };
+                    const mobileCats: MobileCat[] = (() => {
+                      try {
+                        const stored = settings.craving_categories ? JSON.parse(settings.craving_categories) : null;
+                        if (Array.isArray(stored) && stored.length) {
+                          return (stored as { label: string }[]).map(dc => {
+                            const found = navCategories.find(nc => nc.label.toLowerCase() === dc.label.toLowerCase());
+                            return found ?? { label: dc.label, subs: [] };
+                          });
+                        }
+                      } catch { /* fall through */ }
+                      return navCategories as MobileCat[];
+                    })();
+                    return mobileCats.map(cat => (
+                      <div key={cat.label} className="mb-2">
+                        <p className="py-1 text-xs font-bold uppercase tracking-wider text-muted-foreground">{cat.label}</p>
+                        {cat.subs.length > 0 ? cat.subs.map(sub => (
+                          <button
+                            key={sub.label}
+                            onClick={() => { handleNavCategory(sub.category, sub.slug); setMobileShopOpen(false); setMenuOpen(false); }}
+                            className="block w-full py-1.5 text-left text-sm text-muted-foreground hover:text-foreground"
+                          >
+                            {sub.label}
+                          </button>
+                        )) : (
+                          <button
+                            onClick={() => { handleNavCategory(cat.label); setMobileShopOpen(false); setMenuOpen(false); }}
+                            className="block w-full py-1.5 text-left text-sm font-semibold text-secondary hover:text-foreground"
+                          >
+                            Browse all {cat.label}
+                          </button>
+                        )}
+                      </div>
+                    ));
+                  })()}
                 </div>
               )}
               <Link href="/shop/gifting" className="block py-2.5 text-sm font-semibold" onClick={() => setMenuOpen(false)}>Gifting</Link>
@@ -2245,7 +2292,7 @@ function AdminSectionProducts({ catalog, loading, onAdd, onEdit, onDelete }: {
                 <div>
                   <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Unit</label>
                   <input list="unit-presets" value={form.unit} onChange={f('unit')} placeholder="250 gm" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
-                  <datalist id="unit-presets">{UNIT_PRESETS.map(u => <option key={u} value={u} />)}</datalist>
+                  <datalist id="unit-presets">{(() => { try { const u = settings.unit_presets ? JSON.parse(settings.unit_presets) : null; return (Array.isArray(u) ? u : UNIT_PRESETS).map((v: string) => <option key={v} value={v} />); } catch { return UNIT_PRESETS.map(u => <option key={u} value={u} />); } })()}</datalist>
                 </div>
               </div>
               <div>
@@ -2477,6 +2524,7 @@ function AdminSectionCustomers({ customers }: { customers: CustomerRecord[] }) {
 }
 
 // ─── Admin · Settings ─────────────────────────────────────────────────────────
+type CravingCat = { label: string; note: string; image: string };
 function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
   const [currentPw, setCurrentPw] = useState('');
   const [newPw, setNewPw] = useState('');
@@ -2486,13 +2534,57 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
   const [storeInfo, setStoreInfo] = useState<Record<string, string>>({});
   const [storeMsg, setStoreMsg] = useState('');
   const [dangerMsg, setDangerMsg] = useState('');
+  // Local editable states (saved only on button click)
+  const [localCats, setLocalCats] = useState<CravingCat[]>([]);
+  const [catsSaved, setCatsSaved] = useState(false);
+  const [localSlides, setLocalSlides] = useState<typeof heroSlides[number][]>([]);
+  const [slidesSaved, setSlidesSaved] = useState(false);
+  const [localUnits, setLocalUnits] = useState<string[]>([]);
+  const [unitsSaved, setUnitsSaved] = useState(false);
+
   const defaults: Record<string, string> = { name: 'Aggarwal Sweets', address: '12, Hissar Road, Sirsa', phone: '01666234786', hours: '9:00 AM – 9:30 PM' };
   const si = { ...defaults, ...storeInfo };
 
-  // Load settings from DB on mount
+  // Load settings from DB on mount — initialise local states
   useEffect(() => {
-    fetch(`${API}/settings`).then(r => r.json()).then(setStoreInfo).catch(() => {});
+    fetch(`${API}/settings`).then(r => r.json()).then((s: Record<string,string>) => {
+      setStoreInfo(s);
+      // Categories
+      try { const c = s.craving_categories ? JSON.parse(s.craving_categories) : null; setLocalCats(Array.isArray(c) ? c : DEFAULT_CRAVING_CATEGORIES.map(x => ({ label: x.label, note: x.note, image: x.image }))); }
+      catch { setLocalCats(DEFAULT_CRAVING_CATEGORIES.map(x => ({ label: x.label, note: x.note, image: x.image }))); }
+      // Slides
+      try { const sl = s.hero_slides ? JSON.parse(s.hero_slides) : null; setLocalSlides(Array.isArray(sl) ? sl : [...heroSlides]); }
+      catch { setLocalSlides([...heroSlides]); }
+      // Units
+      try { const u = s.unit_presets ? JSON.parse(s.unit_presets) : null; setLocalUnits(Array.isArray(u) ? u : UNIT_PRESETS); }
+      catch { setLocalUnits(UNIT_PRESETS); }
+    }).catch(() => {});
   }, []);
+
+  const saveCategories = async () => {
+    const val = JSON.stringify(localCats);
+    await fetch(`${API}/settings/craving_categories`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: val }) });
+    setStoreInfo(s => ({ ...s, craving_categories: val }));
+    window.dispatchEvent(new Event('aggarwal-settings-updated'));
+    setCatsSaved(true); setTimeout(() => setCatsSaved(false), 2500);
+  };
+
+  const saveSlides = async () => {
+    const val = JSON.stringify(localSlides);
+    await fetch(`${API}/settings/hero_slides`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: val }) });
+    setStoreInfo(s => ({ ...s, hero_slides: val }));
+    window.dispatchEvent(new Event('aggarwal-settings-updated'));
+    setSlidesSaved(true); setTimeout(() => setSlidesSaved(false), 2500);
+  };
+
+  const saveUnits = async () => {
+    const filtered = localUnits.map(u => u.trim()).filter(Boolean);
+    const val = JSON.stringify(filtered);
+    await fetch(`${API}/settings/unit_presets`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: val }) });
+    setStoreInfo(s => ({ ...s, unit_presets: val }));
+    window.dispatchEvent(new Event('aggarwal-settings-updated'));
+    setUnitsSaved(true); setTimeout(() => setUnitsSaved(false), 2500);
+  };
 
   const handleChangePw = async (e: React.FormEvent) => {
     e.preventDefault(); setPwMsg('');
@@ -2656,99 +2748,117 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
       <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
         <h3 className="font-semibold">Hero slider</h3>
         <p className="mt-1 text-sm text-muted-foreground">Customise the homepage banner slides. Leave heading/highlight blank to use defaults.</p>
-        {(() => {
-          const defaultSlides = [...heroSlides];
-          const slides: typeof heroSlides[number][] = (() => {
-            try { const s = storeInfo.hero_slides ? JSON.parse(storeInfo.hero_slides) : null; return Array.isArray(s) ? s : defaultSlides; } catch { return defaultSlides; }
-          })();
-          const setSlide = async (idx: number, patch: Partial<typeof heroSlides[number]>) => {
-            const next = slides.map((s, i) => i === idx ? { ...s, ...patch } : s);
-            const val = JSON.stringify(next);
-            setStoreInfo(s => ({ ...s, hero_slides: val }));
-            await fetch(`${API}/settings/hero_slides`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: val }) });
-            window.dispatchEvent(new Event('aggarwal-settings-updated'));
-          };
-          return (
-            <div className="mt-4 space-y-4">
-              {slides.map((slide, idx) => (
-                <div key={idx} className="rounded-xl border border-border p-4 space-y-3">
-                  <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Slide {idx + 1}</p>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div>
-                      <label className="text-[10px] font-bold uppercase tracking-wider">Eyebrow</label>
-                      <input value={slide.eyebrow} onChange={e => setSlide(idx, { eyebrow: e.target.value as never })} className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold uppercase tracking-wider">Heading</label>
-                      <input value={slide.heading} onChange={e => setSlide(idx, { heading: e.target.value as never })} className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold uppercase tracking-wider">Highlight word</label>
-                      <input value={slide.highlight} onChange={e => setSlide(idx, { highlight: e.target.value as never })} className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold uppercase tracking-wider">CTA button</label>
-                      <input value={slide.cta} onChange={e => setSlide(idx, { cta: e.target.value as never })} className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
-                    </div>
-                    <div className="sm:col-span-2">
-                      <label className="text-[10px] font-bold uppercase tracking-wider">Description</label>
-                      <textarea rows={2} value={slide.description} onChange={e => setSlide(idx, { description: e.target.value as never })} className="mt-1 w-full resize-none rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
-                    </div>
-                  </div>
+        <div className="mt-4 space-y-4">
+          {localSlides.map((slide, idx) => (
+            <div key={idx} className="rounded-xl border border-border p-4 space-y-3">
+              <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Slide {idx + 1}</p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="text-[10px] font-bold uppercase tracking-wider">Eyebrow</label>
+                  <input value={slide.eyebrow} onChange={e => setLocalSlides(ss => ss.map((s, i) => i === idx ? { ...s, eyebrow: e.target.value as never } : s))} className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
                 </div>
-              ))}
+                <div>
+                  <label className="text-[10px] font-bold uppercase tracking-wider">Heading</label>
+                  <input value={slide.heading} onChange={e => setLocalSlides(ss => ss.map((s, i) => i === idx ? { ...s, heading: e.target.value as never } : s))} className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold uppercase tracking-wider">Highlight word</label>
+                  <input value={slide.highlight} onChange={e => setLocalSlides(ss => ss.map((s, i) => i === idx ? { ...s, highlight: e.target.value as never } : s))} className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold uppercase tracking-wider">CTA button</label>
+                  <input value={slide.cta} onChange={e => setLocalSlides(ss => ss.map((s, i) => i === idx ? { ...s, cta: e.target.value as never } : s))} className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="text-[10px] font-bold uppercase tracking-wider">Description</label>
+                  <textarea rows={2} value={slide.description} onChange={e => setLocalSlides(ss => ss.map((s, i) => i === idx ? { ...s, description: e.target.value as never } : s))} className="mt-1 w-full resize-none rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                </div>
+              </div>
             </div>
-          );
-        })()}
+          ))}
+          <div className="flex items-center justify-end gap-3 pt-1">
+            {slidesSaved && <span className="text-xs font-semibold text-green-600">✓ Saved!</span>}
+            <button type="button" onClick={saveSlides}
+              className="rounded-xl bg-primary px-5 py-2 text-sm font-bold text-primary-foreground hover:opacity-90">
+              Save slider
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Craving section */}
       <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
         <h3 className="font-semibold">Browse by craving section</h3>
-        <p className="mt-1 text-sm text-muted-foreground">Edit the category cards on the homepage. Also determines product category options.</p>
-        {(() => {
-          const defCats = DEFAULT_CRAVING_CATEGORIES.map(c => ({ label: c.label, note: c.note, image: c.image }));
-          const cats: { label: string; note: string; image: string }[] = (() => {
-            try { const s = storeInfo.craving_categories ? JSON.parse(storeInfo.craving_categories) : null; return Array.isArray(s) ? s : defCats; } catch { return defCats; }
-          })();
-          const setCats = async (next: typeof cats) => {
-            const val = JSON.stringify(next);
-            setStoreInfo(s => ({ ...s, craving_categories: val }));
-            await fetch(`${API}/settings/craving_categories`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: val }) });
-            window.dispatchEvent(new Event('aggarwal-settings-updated'));
-          };
-          return (
-            <div className="mt-4 space-y-3">
-              {cats.map((cat, idx) => (
-                <div key={idx} className="grid gap-2 rounded-xl border border-border p-3 sm:grid-cols-3">
-                  <div>
-                    <label className="text-[10px] font-bold uppercase tracking-wider">Category name</label>
-                    <input value={cat.label} onChange={e => { const next = cats.map((c, i) => i === idx ? { ...c, label: e.target.value } : c); setCats(next); }}
-                      className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-bold uppercase tracking-wider">Tagline</label>
-                    <input value={cat.note} onChange={e => { const next = cats.map((c, i) => i === idx ? { ...c, note: e.target.value } : c); setCats(next); }}
-                      className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
-                  </div>
-                  <div className="flex items-end gap-2">
-                    <div className="flex-1">
-                      <label className="text-[10px] font-bold uppercase tracking-wider">Image URL</label>
-                      <input value={cat.image} onChange={e => { const next = cats.map((c, i) => i === idx ? { ...c, image: e.target.value } : c); setCats(next); }}
-                        className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
-                    </div>
-                    <button type="button" onClick={() => setCats(cats.filter((_, i) => i !== idx))}
-                      className="mb-1 grid size-8 place-items-center rounded-lg border border-red-200 text-red-400 hover:bg-red-50"><Trash2 className="size-3.5" /></button>
-                  </div>
+        <p className="mt-1 text-sm text-muted-foreground">Edit category cards on the homepage. New categories appear in the nav menu and product form.</p>
+        <div className="mt-4 space-y-3">
+          {localCats.map((cat, idx) => (
+            <div key={idx} className="grid gap-2 rounded-xl border border-border p-3 sm:grid-cols-3">
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider">Category name</label>
+                <input value={cat.label} onChange={e => setLocalCats(cs => cs.map((c, i) => i === idx ? { ...c, label: e.target.value } : c))}
+                  className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider">Tagline</label>
+                <input value={cat.note} onChange={e => setLocalCats(cs => cs.map((c, i) => i === idx ? { ...c, note: e.target.value } : c))}
+                  className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
+              </div>
+              <div className="flex items-end gap-2">
+                <div className="flex-1">
+                  <label className="text-[10px] font-bold uppercase tracking-wider">Image URL</label>
+                  <input value={cat.image} onChange={e => setLocalCats(cs => cs.map((c, i) => i === idx ? { ...c, image: e.target.value } : c))}
+                    className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
                 </div>
-              ))}
-              <button type="button" onClick={() => setCats([...cats, { label: 'New Category', note: 'Description here', image: '/hero-mithai.jpg' }])}
-                className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border py-2.5 text-sm font-bold text-muted-foreground hover:bg-muted">
-                <Plus className="size-4" /> Add category
+                <button type="button" onClick={() => setLocalCats(cs => cs.filter((_, i) => i !== idx))}
+                  className="mb-1 grid size-8 place-items-center rounded-lg border border-red-200 text-red-400 hover:bg-red-50"><Trash2 className="size-3.5" /></button>
+              </div>
+            </div>
+          ))}
+          <button type="button" onClick={() => setLocalCats(cs => [...cs, { label: 'New Category', note: 'Description here', image: '/hero-mithai.jpg' }])}
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border py-2.5 text-sm font-bold text-muted-foreground hover:bg-muted">
+            <Plus className="size-4" /> Add category
+          </button>
+          <div className="flex items-center justify-end gap-3 pt-1">
+            {catsSaved && <span className="text-xs font-semibold text-green-600">✓ Saved!</span>}
+            <button type="button" onClick={saveCategories}
+              className="rounded-xl bg-primary px-5 py-2 text-sm font-bold text-primary-foreground hover:opacity-90">
+              Save categories
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Unit presets */}
+      <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+        <h3 className="font-semibold">Unit presets</h3>
+        <p className="mt-1 text-sm text-muted-foreground">Manage the unit options shown in the product form (e.g. 250 gm, 500 gm, per piece). Products can still use free-text units.</p>
+        <div className="mt-4 space-y-2">
+          {localUnits.map((unit, idx) => (
+            <div key={idx} className="flex gap-2">
+              <input
+                value={unit}
+                onChange={e => setLocalUnits(us => us.map((u, i) => i === idx ? e.target.value : u))}
+                placeholder="e.g. 250 gm"
+                className="flex-1 rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+              />
+              <button type="button" onClick={() => setLocalUnits(us => us.filter((_, i) => i !== idx))}
+                className="grid size-9 place-items-center rounded-lg border border-red-200 text-red-400 hover:bg-red-50">
+                <Trash2 className="size-3.5" />
               </button>
             </div>
-          );
-        })()}
+          ))}
+          <button type="button" onClick={() => setLocalUnits(us => [...us, ''])}
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border py-2.5 text-sm font-bold text-muted-foreground hover:bg-muted">
+            <Plus className="size-4" /> Add unit
+          </button>
+          <div className="flex items-center justify-end gap-3 pt-1">
+            {unitsSaved && <span className="text-xs font-semibold text-green-600">✓ Saved!</span>}
+            <button type="button" onClick={saveUnits}
+              className="rounded-xl bg-primary px-5 py-2 text-sm font-bold text-primary-foreground hover:opacity-90">
+              Save units
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Danger zone */}
