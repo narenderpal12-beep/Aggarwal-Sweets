@@ -11,7 +11,7 @@ import {
   Trash2, Wheat, CircleAlert, LogIn, KeyRound, BookOpen, Send, MessageCircle,
   Package, ListOrdered, Settings, Home, ChevronRight as Chevron, Lock, RotateCcw, FlaskConical,
   LogOut, Eye, EyeOff, Pencil, RefreshCw, Users, Loader2,
-  Tag, Percent, Upload, Palette, FileText, ImageIcon, Type
+  Tag, Percent, Upload, Palette, FileText, ImageIcon, Type, LayoutList
 } from 'lucide-react';
 import NotFound from '@/pages/not-found';
 
@@ -182,6 +182,12 @@ const DEFAULT_CRAVING_CATEGORIES: { label: string; note: string; icon: typeof Gi
   { label: 'Snacks', note: 'Old recipes, new cravings', icon: Star, image: '/ladoo-plate.jpg' },
   { label: 'Gifting', note: 'Send a little celebration', icon: Gift, image: '/hero-mithai.jpg' },
 ];
+const DEFAULT_MASTER_CATEGORIES: MasterCategory[] = [
+  { id: 'mithai',  label: 'Mithai',  note: 'Soft, fragrant, handmade',      image: '/hero-mithai.jpg',  inMenu: true, inCraving: true },
+  { id: 'namkeen', label: 'Namkeen', note: 'Crunch for every chai',         image: '/namkeen-bowl.jpg', inMenu: true, inCraving: true },
+  { id: 'snacks',  label: 'Snacks',  note: 'Old recipes, new cravings',     image: '/ladoo-plate.jpg',  inMenu: true, inCraving: true },
+  { id: 'gifting', label: 'Gifting', note: 'Send a little celebration',     image: '/hero-mithai.jpg',  inMenu: true, inCraving: true },
+];
 const ICON_MAP: Record<string, typeof Gift> = { Mithai: Sparkles, Namkeen: Wheat, Snacks: Star, Gifting: Gift };
 
 
@@ -332,7 +338,8 @@ async function apiValidateAdmin(email: string, password: string): Promise<boolea
 }
 
 const ADMIN_EMAIL = 'admin@aggarwalsweets.in';
-type AdminSection = 'dashboard' | 'products' | 'orders' | 'customers' | 'settings' | 'blog' | 'coupons';
+type AdminSection = 'dashboard' | 'products' | 'orders' | 'customers' | 'categories' | 'settings' | 'blog' | 'coupons';
+type MasterCategory = { id: string; label: string; note: string; image: string; inMenu: boolean; inCraving: boolean };
 
 // ─── Site settings context ────────────────────────────────────────────────────
 const SiteSettingsContext = createContext<Record<string, string>>({});
@@ -514,9 +521,9 @@ function ShopDropdown({ onNavigate }: { onNavigate: (cat: string, slug?: string)
   type DisplayCat = { label: string; subs: NavSubItem[] };
   const displayCats: DisplayCat[] = (() => {
     try {
-      const stored = settings.craving_categories ? JSON.parse(settings.craving_categories) : null;
+      const stored = settings.categories_master ? JSON.parse(settings.categories_master) : null;
       if (Array.isArray(stored) && stored.length) {
-        return (stored as { label: string }[]).map(dc => {
+        return (stored as MasterCategory[]).filter(dc => dc.inMenu).map(dc => {
           const found = navCategories.find(nc => nc.label.toLowerCase() === dc.label.toLowerCase());
           return found ?? { label: dc.label, subs: [] };
         });
@@ -682,9 +689,9 @@ function Header({
                     type MobileCat = { label: string; subs: NavSubItem[] };
                     const mobileCats: MobileCat[] = (() => {
                       try {
-                        const stored = settings.craving_categories ? JSON.parse(settings.craving_categories) : null;
+                        const stored = settings.categories_master ? JSON.parse(settings.categories_master) : null;
                         if (Array.isArray(stored) && stored.length) {
-                          return (stored as { label: string }[]).map(dc => {
+                          return (stored as MasterCategory[]).filter(dc => dc.inMenu).map(dc => {
                             const found = navCategories.find(nc => nc.label.toLowerCase() === dc.label.toLowerCase());
                             return found ?? { label: dc.label, subs: [] };
                           });
@@ -966,10 +973,10 @@ function CategoryRail() {
   const settings = useSiteSettings();
   const cats: { label: string; note: string; icon: typeof Gift; image: string }[] = (() => {
     try {
-      const stored = settings.craving_categories ? JSON.parse(settings.craving_categories) : null;
+      const stored = settings.categories_master ? JSON.parse(settings.categories_master) : null;
       if (Array.isArray(stored) && stored.length) {
-        return stored.map((c: { label: string; note: string; image: string }) => ({
-          ...c, icon: ICON_MAP[c.label] ?? Sparkles,
+        return (stored as MasterCategory[]).filter(c => c.inCraving).map(c => ({
+          label: c.label, note: c.note, image: c.image, icon: ICON_MAP[c.label] ?? Sparkles,
         }));
       }
     } catch { /* fall through */ }
@@ -1920,13 +1927,14 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
   };
 
   const navItems: { key: AdminSection; icon: typeof LayoutDashboard; label: string }[] = [
-    { key: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-    { key: 'products',  icon: Package,         label: 'Products' },
-    { key: 'orders',    icon: ShoppingBag,     label: 'Orders' },
-    { key: 'customers', icon: Users,           label: 'Customers' },
-    { key: 'blog',      icon: FileText,        label: 'Blog' },
-    { key: 'coupons',   icon: Tag,             label: 'Coupons' },
-    { key: 'settings',  icon: Settings,        label: 'Settings' },
+    { key: 'dashboard',  icon: LayoutDashboard, label: 'Dashboard' },
+    { key: 'products',   icon: Package,         label: 'Products' },
+    { key: 'categories', icon: LayoutList,      label: 'Categories' },
+    { key: 'orders',     icon: ShoppingBag,     label: 'Orders' },
+    { key: 'customers',  icon: Users,           label: 'Customers' },
+    { key: 'blog',       icon: FileText,        label: 'Blog' },
+    { key: 'coupons',    icon: Tag,             label: 'Coupons' },
+    { key: 'settings',   icon: Settings,        label: 'Settings' },
   ];
 
   const navigate = (s: AdminSection) => { setSection(s); setMobileNavOpen(false); };
@@ -2016,8 +2024,9 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
           {section === 'dashboard' && <AdminSectionDashboard catalog={catalog} orders={orders} customers={customers} onNavigate={setSection} />}
           {section === 'products'  && <AdminSectionProducts  catalog={catalog} loading={dataLoading} onAdd={addProduct} onEdit={editProduct} onDelete={deleteProduct} />}
           {section === 'orders'    && <AdminSectionOrders    orders={orders}   loading={dataLoading} onStatusChange={updateOrderStatus} />}
-          {section === 'customers' && <AdminSectionCustomers customers={customers} />}
-          {section === 'blog'      && <AdminSectionBlog      posts={blogPosts} onRefresh={fetchAll} />}
+          {section === 'customers'  && <AdminSectionCustomers customers={customers} />}
+          {section === 'categories' && <AdminSectionCategories onRefresh={fetchAll} />}
+          {section === 'blog'       && <AdminSectionBlog      posts={blogPosts} onRefresh={fetchAll} />}
           {section === 'coupons'   && <AdminSectionCoupons   coupons={coupons} onRefresh={fetchAll} />}
           {section === 'settings'  && <AdminSectionSettings  adminUser={adminUser} />}
         </main>
@@ -2140,10 +2149,10 @@ function AdminSectionProducts({ catalog, loading, onAdd, onEdit, onDelete }: {
   const settings = useSiteSettings();
   const dynamicCats: string[] = (() => {
     try {
-      const stored = settings.craving_categories ? JSON.parse(settings.craving_categories) : null;
-      if (Array.isArray(stored) && stored.length) return stored.map((c: { label: string }) => c.label);
+      const stored = settings.categories_master ? JSON.parse(settings.categories_master) : null;
+      if (Array.isArray(stored) && stored.length) return (stored as MasterCategory[]).map(c => c.label);
     } catch { /* fall through */ }
-    return ['Mithai', 'Namkeen', 'Snacks', 'Gifting'];
+    return DEFAULT_MASTER_CATEGORIES.map(c => c.label);
   })();
   const allCats = ['All', ...dynamicCats];
   const [imageTab, setImageTab] = useState<'url' | 'upload'>('url');
@@ -2523,6 +2532,202 @@ function AdminSectionCustomers({ customers }: { customers: CustomerRecord[] }) {
   );
 }
 
+// ─── Admin · Categories ───────────────────────────────────────────────────────
+function AdminSectionCategories({ onRefresh }: { onRefresh: () => void }) {
+  type CatForm = { label: string; note: string; image: string; inMenu: boolean; inCraving: boolean };
+  const BLANK_CAT: CatForm = { label: '', note: '', image: '/hero-mithai.jpg', inMenu: true, inCraving: true };
+  const settings = useSiteSettings();
+  const [cats, setCats] = useState<MasterCategory[]>([]);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [form, setForm] = useState<CatForm>(BLANK_CAT);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+
+  useEffect(() => {
+    try {
+      const stored = settings.categories_master ? JSON.parse(settings.categories_master) : null;
+      setCats(Array.isArray(stored) && stored.length ? stored : DEFAULT_MASTER_CATEGORIES);
+    } catch { setCats(DEFAULT_MASTER_CATEGORIES); }
+  }, [settings.categories_master]);
+
+  const persist = async (next: MasterCategory[]) => {
+    await fetch(`${API}/settings/categories_master`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: JSON.stringify(next) }),
+    });
+    window.dispatchEvent(new Event('aggarwal-settings-updated'));
+    onRefresh();
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault(); setSaving(true);
+    try {
+      const next = editingId
+        ? cats.map(c => c.id === editingId ? { ...c, ...form } : c)
+        : [...cats, { id: `cat-${Date.now()}`, ...form }];
+      await persist(next);
+      setModalOpen(false);
+    } finally { setSaving(false); }
+  };
+
+  const handleDelete = async (id: string) => {
+    await persist(cats.filter(c => c.id !== id));
+    setDeleteId(null);
+  };
+
+  const toggleField = async (id: string, field: 'inMenu' | 'inCraving') => {
+    const next = cats.map(c => c.id === id ? { ...c, [field]: !c[field] } : c);
+    setCats(next);
+    await persist(next);
+  };
+
+  return (
+    <div className="max-w-3xl space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-bold">Categories</h2>
+          <p className="text-sm text-muted-foreground">Master list — controls the nav menu, homepage craving section, and product form dropdown.</p>
+        </div>
+        <button onClick={() => { setForm(BLANK_CAT); setEditingId(null); setModalOpen(true); }}
+          className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground hover:opacity-90">
+          <Plus className="size-4" /> Add category
+        </button>
+      </div>
+
+      {/* Table */}
+      <div className="overflow-hidden rounded-2xl border border-border bg-background">
+        <table className="w-full text-sm">
+          <thead className="bg-muted/50">
+            <tr>
+              <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Category</th>
+              <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider hidden sm:table-cell">Tagline</th>
+              <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">In Menu</th>
+              <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">In Craving</th>
+              <th className="px-4 py-3" />
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {cats.map(cat => (
+              <tr key={cat.id} className="hover:bg-muted/30">
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <img src={cat.image} alt="" className="size-10 rounded-lg object-cover shrink-0" onError={e => { (e.target as HTMLImageElement).src = '/hero-mithai.jpg'; }} />
+                    <span className="font-semibold">{cat.label}</span>
+                  </div>
+                </td>
+                <td className="px-4 py-3 text-muted-foreground hidden sm:table-cell">{cat.note}</td>
+                <td className="px-4 py-3 text-center">
+                  <button onClick={() => toggleField(cat.id, 'inMenu')}
+                    className={`inline-flex size-6 items-center justify-center rounded-md border-2 transition-colors ${cat.inMenu ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background hover:border-primary/50'}`}>
+                    {cat.inMenu && <Check className="size-3.5" />}
+                  </button>
+                </td>
+                <td className="px-4 py-3 text-center">
+                  <button onClick={() => toggleField(cat.id, 'inCraving')}
+                    className={`inline-flex size-6 items-center justify-center rounded-md border-2 transition-colors ${cat.inCraving ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background hover:border-primary/50'}`}>
+                    {cat.inCraving && <Check className="size-3.5" />}
+                  </button>
+                </td>
+                <td className="px-4 py-3">
+                  <div className="flex items-center justify-end gap-2">
+                    <button onClick={() => { setForm({ label: cat.label, note: cat.note, image: cat.image, inMenu: cat.inMenu, inCraving: cat.inCraving }); setEditingId(cat.id); setModalOpen(true); }}
+                      className="grid size-8 place-items-center rounded-lg border border-border hover:bg-muted" title="Edit">
+                      <Pencil className="size-3.5" />
+                    </button>
+                    <button onClick={() => setDeleteId(cat.id)}
+                      className="grid size-8 place-items-center rounded-lg border border-red-200 text-red-400 hover:bg-red-50" title="Delete">
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {cats.length === 0 && (
+              <tr><td colSpan={5} className="px-4 py-10 text-center text-sm text-muted-foreground">No categories yet. Click "Add category" to create the first one.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Legend */}
+      <div className="rounded-xl border border-border bg-muted/30 px-4 py-3 text-xs text-muted-foreground space-y-1">
+        <p><strong className="text-foreground">In Menu</strong> — shows this category in the "Shop All" navigation dropdown.</p>
+        <p><strong className="text-foreground">In Craving</strong> — shows this category as a card in the homepage "Browse by craving" section.</p>
+        <p>All categories (regardless of toggles) appear in the product form's category dropdown.</p>
+      </div>
+
+      {/* Add / Edit modal */}
+      {modalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-background p-6 shadow-2xl">
+            <div className="mb-5 flex items-center justify-between">
+              <h3 className="text-lg font-bold">{editingId ? 'Edit category' : 'Add category'}</h3>
+              <button onClick={() => setModalOpen(false)} className="grid size-8 place-items-center rounded-lg hover:bg-muted"><X className="size-4" /></button>
+            </div>
+            <form onSubmit={handleSave} className="space-y-4">
+              <div>
+                <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Category name *</label>
+                <input required value={form.label} onChange={e => setForm(f => ({ ...f, label: e.target.value }))}
+                  placeholder="e.g. Beverages" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Tagline <span className="text-muted-foreground font-normal normal-case">(shown on craving card)</span></label>
+                <input value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))}
+                  placeholder="e.g. Cool &amp; refreshing" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Image URL <span className="text-muted-foreground font-normal normal-case">(for craving card background)</span></label>
+                <input value={form.image} onChange={e => setForm(f => ({ ...f, image: e.target.value }))}
+                  placeholder="/hero-mithai.jpg" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+              </div>
+              <div className="flex gap-6 rounded-xl border border-border bg-muted/30 px-4 py-3">
+                {([
+                  { field: 'inMenu' as const, label: 'Show in nav menu' },
+                  { field: 'inCraving' as const, label: 'Show in craving section' },
+                ] as { field: 'inMenu' | 'inCraving'; label: string }[]).map(({ field, label }) => (
+                  <label key={field} className="flex cursor-pointer items-center gap-2.5 select-none">
+                    <button type="button" onClick={() => setForm(f => ({ ...f, [field]: !f[field] }))}
+                      className={`inline-flex size-5 shrink-0 items-center justify-center rounded border-2 transition-colors ${form[field] ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background'}`}>
+                      {form[field] && <Check className="size-3" />}
+                    </button>
+                    <span className="text-sm">{label}</span>
+                  </label>
+                ))}
+              </div>
+              <div className="flex gap-3 pt-1">
+                <button type="button" onClick={() => setModalOpen(false)}
+                  className="flex-1 rounded-xl border border-border py-2.5 text-sm font-bold hover:bg-muted">Cancel</button>
+                <button type="submit" disabled={saving}
+                  className="flex-1 rounded-xl bg-primary py-2.5 text-sm font-bold text-primary-foreground hover:opacity-90 disabled:opacity-60">
+                  {saving ? 'Saving…' : editingId ? 'Save changes' : 'Add category'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete confirm */}
+      {deleteId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-sm rounded-2xl bg-background p-6 shadow-2xl text-center">
+            <div className="mx-auto mb-3 grid size-14 place-items-center rounded-2xl bg-red-50 text-red-400">
+              <Trash2 className="size-7" />
+            </div>
+            <h3 className="text-lg font-bold">Delete category?</h3>
+            <p className="mt-1 text-sm text-muted-foreground">Existing products using this category won't be deleted — they'll just show an unlisted category label.</p>
+            <div className="mt-5 flex gap-3">
+              <button onClick={() => setDeleteId(null)} className="flex-1 rounded-xl border border-border py-2.5 text-sm font-bold hover:bg-muted">Cancel</button>
+              <button onClick={() => handleDelete(deleteId)} className="flex-1 rounded-xl bg-red-500 py-2.5 text-sm font-bold text-white hover:bg-red-600">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Admin · Settings ─────────────────────────────────────────────────────────
 type CravingCat = { label: string; note: string; image: string };
 function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
@@ -2786,44 +2991,15 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
         </div>
       </div>
 
-      {/* Craving section */}
+      {/* Categories pointer */}
       <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
-        <h3 className="font-semibold">Browse by craving section</h3>
-        <p className="mt-1 text-sm text-muted-foreground">Edit category cards on the homepage. New categories appear in the nav menu and product form.</p>
-        <div className="mt-4 space-y-3">
-          {localCats.map((cat, idx) => (
-            <div key={idx} className="grid gap-2 rounded-xl border border-border p-3 sm:grid-cols-3">
-              <div>
-                <label className="text-[10px] font-bold uppercase tracking-wider">Category name</label>
-                <input value={cat.label} onChange={e => setLocalCats(cs => cs.map((c, i) => i === idx ? { ...c, label: e.target.value } : c))}
-                  className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
-              </div>
-              <div>
-                <label className="text-[10px] font-bold uppercase tracking-wider">Tagline</label>
-                <input value={cat.note} onChange={e => setLocalCats(cs => cs.map((c, i) => i === idx ? { ...c, note: e.target.value } : c))}
-                  className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
-              </div>
-              <div className="flex items-end gap-2">
-                <div className="flex-1">
-                  <label className="text-[10px] font-bold uppercase tracking-wider">Image URL</label>
-                  <input value={cat.image} onChange={e => setLocalCats(cs => cs.map((c, i) => i === idx ? { ...c, image: e.target.value } : c))}
-                    className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
-                </div>
-                <button type="button" onClick={() => setLocalCats(cs => cs.filter((_, i) => i !== idx))}
-                  className="mb-1 grid size-8 place-items-center rounded-lg border border-red-200 text-red-400 hover:bg-red-50"><Trash2 className="size-3.5" /></button>
-              </div>
-            </div>
-          ))}
-          <button type="button" onClick={() => setLocalCats(cs => [...cs, { label: 'New Category', note: 'Description here', image: '/hero-mithai.jpg' }])}
-            className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border py-2.5 text-sm font-bold text-muted-foreground hover:bg-muted">
-            <Plus className="size-4" /> Add category
-          </button>
-          <div className="flex items-center justify-end gap-3 pt-1">
-            {catsSaved && <span className="text-xs font-semibold text-green-600">✓ Saved!</span>}
-            <button type="button" onClick={saveCategories}
-              className="rounded-xl bg-primary px-5 py-2 text-sm font-bold text-primary-foreground hover:opacity-90">
-              Save categories
-            </button>
+        <div className="flex items-start gap-4">
+          <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
+            <LayoutList className="size-5" />
+          </div>
+          <div>
+            <h3 className="font-semibold">Categories</h3>
+            <p className="mt-1 text-sm text-muted-foreground">Categories are now managed from the <strong className="text-foreground">Categories</strong> section in the sidebar. You can add, edit, and delete categories there, and choose whether each appears in the nav menu or the homepage craving section.</p>
           </div>
         </div>
       </div>
