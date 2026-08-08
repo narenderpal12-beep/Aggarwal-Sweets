@@ -273,44 +273,58 @@ const variantLabel = (variant: ProductVariant) => `${variant.material} · ${vari
 const lowestPrice = (product: Product) =>
   Math.min(...product.variants.map(v => v.price), product.price);
 
-function readCatalog(): Product[] {
-  try {
-    const saved = JSON.parse(localStorage.getItem('aggarwal-catalog') || 'null');
-    return Array.isArray(saved) && saved.length ? saved : products;
-  } catch { return products; }
-}
-
 function readUser(): AuthUser | null {
   try { return JSON.parse(localStorage.getItem('aggarwal-user') || 'null'); } catch { return null; }
 }
+// Customer's own order history stays in localStorage (fast, works offline)
 function readOrders(): OrderRecord[] {
   try { return JSON.parse(localStorage.getItem('aggarwal-orders') || '[]'); } catch { return []; }
 }
-function saveOrder(order: OrderRecord) {
+function saveOrderLocal(order: OrderRecord) {
   const orders = readOrders();
   localStorage.setItem('aggarwal-orders', JSON.stringify([order, ...orders]));
 }
-function writeOrders(orders: OrderRecord[]) {
-  localStorage.setItem('aggarwal-orders', JSON.stringify(orders));
+
+// ─── API helpers ──────────────────────────────────────────────────────────────
+const API = '/api';
+
+async function apiFetchCatalog(): Promise<Product[]> {
+  try {
+    const r = await fetch(`${API}/products`);
+    if (!r.ok) throw new Error();
+    return r.json();
+  } catch { return products; /* static fallback */ }
 }
-function writeCatalog(products: Product[]) {
-  localStorage.setItem('aggarwal-catalog', JSON.stringify(products));
-  window.dispatchEvent(new Event('aggarwal-catalog-updated'));
+
+async function apiSaveOrderToDb(order: OrderRecord): Promise<void> {
+  try {
+    await fetch(`${API}/orders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(order),
+    });
+  } catch { /* non-fatal — customer still sees their order in localStorage */ }
 }
-function readCustomers(): CustomerRecord[] {
-  try { return JSON.parse(localStorage.getItem('aggarwal-customers') || '[]'); } catch { return []; }
+
+async function apiTrackCustomer(user: AuthUser): Promise<void> {
+  try {
+    await fetch(`${API}/customers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: user.email, name: user.name }),
+    });
+  } catch { /* non-fatal */ }
 }
-function trackCustomer(user: AuthUser) {
-  const list = readCustomers();
-  if (!list.find(c => c.email === user.email)) {
-    localStorage.setItem('aggarwal-customers', JSON.stringify([
-      ...list,
-      { email: user.email, name: user.name, joinedAt: new Date().toISOString() }
-    ]));
-  }
-}
-function readAdminPassword(): string {
-  return localStorage.getItem('aggarwal-admin-password') || 'Admin@123';
+
+async function apiValidateAdmin(email: string, password: string): Promise<boolean> {
+  try {
+    const r = await fetch(`${API}/auth/admin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    return r.ok;
+  } catch { return false; }
 }
 
 const ADMIN_EMAIL = 'admin@aggarwalsweets.in';
@@ -1538,7 +1552,9 @@ function Checkout({ subtotal, cart, onClose, onDone }: { subtotal: number; cart:
       address,
       phone,
     };
-    saveOrder(order);
+    // Save locally (customer account view) and persist to DB (admin view)
+    saveOrderLocal(order);
+    apiSaveOrderToDb(order);
     setOrderRef(order);
     setSubmitted(true);
   };
@@ -1623,19 +1639,18 @@ function AdminLoginScreen({ onLogin }: { onLogin: (u: AuthUser) => void }) {
   const [loading, setLoading] = useState(false);
   const [showPw, setShowPw] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true); setError('');
-    setTimeout(() => {
-      setLoading(false);
-      if (email.toLowerCase() === ADMIN_EMAIL && password === readAdminPassword()) {
-        const u: AuthUser = { email: ADMIN_EMAIL, role: 'admin', name: 'Admin' };
-        localStorage.setItem('aggarwal-user', JSON.stringify(u));
-        onLogin(u);
-      } else {
-        setError('Invalid credentials. Please check and try again.');
-      }
-    }, 900);
+    const ok = await apiValidateAdmin(email, password);
+    setLoading(false);
+    if (ok) {
+      const u: AuthUser = { email: ADMIN_EMAIL, role: 'admin', name: 'Admin' };
+      localStorage.setItem('aggarwal-user', JSON.stringify(u));
+      onLogin(u);
+    } else {
+      setError('Invalid credentials. Please check and try again.');
+    }
   };
 
   return (
@@ -1686,15 +1701,52 @@ function AdminLoginScreen({ onLogin }: { onLogin: (u: AuthUser) => void }) {
 // ─── Admin Dashboard Shell ────────────────────────────────────────────────────
 function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout: () => void }) {
   const [section, setSection] = useState<AdminSection>('dashboard');
-  const [catalog, setCatalog] = useState<Product[]>(readCatalog);
-  const [orders, setOrders] = useState<OrderRecord[]>(readOrders);
-  const [customers, setCustomers] = useState<CustomerRecord[]>(readCustomers);
+  const [catalog, setCatalog] = useState<Product[]>([]);
+  const [orders, setOrders] = useState<OrderRecord[]>([]);
+  const [customers, setCustomers] = useState<CustomerRecord[]>([]);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [dataLoading, setDataLoading] = useState(true);
 
-  const refreshAll = () => { setCatalog(readCatalog()); setOrders(readOrders()); setCustomers(readCustomers()); };
+  const fetchAll = async () => {
+    setDataLoading(true);
+    try {
+      const [p, o, c] = await Promise.all([
+        fetch(`${API}/products`).then(r => r.json()),
+        fetch(`${API}/orders`).then(r => r.json()),
+        fetch(`${API}/customers`).then(r => r.json()),
+      ]);
+      setCatalog(Array.isArray(p) ? p : []);
+      setOrders(Array.isArray(o) ? o : []);
+      setCustomers(Array.isArray(c) ? c : []);
+    } finally { setDataLoading(false); }
+  };
 
-  const updateCatalog = (p: Product[]) => { writeCatalog(p); setCatalog(p); };
-  const updateOrders = (o: OrderRecord[]) => { writeOrders(o); setOrders(o); };
+  useEffect(() => { fetchAll(); }, []);
+
+  const refreshAll = () => { fetchAll(); };
+
+  // Product CRUD
+  const addProduct = async (product: Product) => {
+    await fetch(`${API}/products`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(product) });
+    setCatalog(prev => [...prev, product]);
+    window.dispatchEvent(new Event('aggarwal-catalog-updated'));
+  };
+  const editProduct = async (product: Product) => {
+    await fetch(`${API}/products/${product.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(product) });
+    setCatalog(prev => prev.map(p => p.id === product.id ? product : p));
+    window.dispatchEvent(new Event('aggarwal-catalog-updated'));
+  };
+  const deleteProduct = async (id: string) => {
+    await fetch(`${API}/products/${id}`, { method: 'DELETE' });
+    setCatalog(prev => prev.filter(p => p.id !== id));
+    window.dispatchEvent(new Event('aggarwal-catalog-updated'));
+  };
+
+  // Order status
+  const updateOrderStatus = async (id: string, status: OrderStatus) => {
+    await fetch(`${API}/orders/${id}/status`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
+    setOrders(prev => prev.map(o => o.id === id ? { ...o, status } : o));
+  };
 
   const navItems: { key: AdminSection; icon: typeof LayoutDashboard; label: string }[] = [
     { key: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
@@ -1788,8 +1840,8 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
         {/* Section content */}
         <main className="flex-1 overflow-auto bg-[#f8f5f0] p-5 sm:p-7">
           {section === 'dashboard' && <AdminSectionDashboard catalog={catalog} orders={orders} customers={customers} onNavigate={setSection} />}
-          {section === 'products'  && <AdminSectionProducts  catalog={catalog}  onUpdate={updateCatalog} />}
-          {section === 'orders'    && <AdminSectionOrders    orders={orders}    onUpdate={updateOrders} />}
+          {section === 'products'  && <AdminSectionProducts  catalog={catalog} loading={dataLoading} onAdd={addProduct} onEdit={editProduct} onDelete={deleteProduct} />}
+          {section === 'orders'    && <AdminSectionOrders    orders={orders}   loading={dataLoading} onStatusChange={updateOrderStatus} />}
           {section === 'customers' && <AdminSectionCustomers customers={customers} />}
           {section === 'settings'  && <AdminSectionSettings  adminUser={adminUser} />}
         </main>
@@ -1896,7 +1948,12 @@ const BLANK_FORM: ProductFormData = {
   v1w: '250 gm', v1p: '', v2w: '500 gm', v2p: '', v3w: '1 kg', v3p: '',
 };
 
-function AdminSectionProducts({ catalog, onUpdate }: { catalog: Product[]; onUpdate: (p: Product[]) => void }) {
+function AdminSectionProducts({ catalog, loading, onAdd, onEdit, onDelete }: {
+  catalog: Product[]; loading: boolean;
+  onAdd: (p: Product) => Promise<void>;
+  onEdit: (p: Product) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
+}) {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<ProductFormData>(BLANK_FORM);
@@ -1918,7 +1975,9 @@ function AdminSectionProducts({ catalog, onUpdate }: { catalog: Product[]; onUpd
   const f = (field: keyof ProductFormData) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setForm(prev => ({ ...prev, [field]: e.target.value }));
 
-  const handleSave = (e: React.FormEvent) => {
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     const buildVariant = (w: string, p: string): ProductVariant[] =>
       w && p ? [{ material: 'Standard', weight: w, price: Number(p) }] : [];
@@ -1938,8 +1997,11 @@ function AdminSectionProducts({ catalog, onUpdate }: { catalog: Product[]; onUpd
       rating: existing?.rating ?? 4.5, reviews: existing?.reviews ?? 0,
       variants, tags: existing?.tags ?? [],
     };
-    onUpdate(editingId ? catalog.map(p => p.id === editingId ? product : p) : [...catalog, product]);
-    setModalOpen(false);
+    setSaving(true);
+    try {
+      if (editingId) { await onEdit(product); } else { await onAdd(product); }
+      setModalOpen(false);
+    } finally { setSaving(false); }
   };
 
   const filtered = catalog.filter(p =>
@@ -2077,7 +2139,7 @@ function AdminSectionProducts({ catalog, onUpdate }: { catalog: Product[]; onUpd
               </div>
               <div className="flex gap-3 pt-2 pb-1">
                 <button type="button" onClick={() => setModalOpen(false)} className="flex-1 rounded-xl border border-border py-3 text-sm font-bold">Cancel</button>
-                <button type="submit" className="flex-1 rounded-xl bg-primary py-3 text-sm font-bold text-primary-foreground">{editingId ? 'Save changes' : 'Add product'}</button>
+                <button type="submit" disabled={saving} className="flex-1 rounded-xl bg-primary py-3 text-sm font-bold text-primary-foreground disabled:opacity-60">{saving ? 'Saving…' : editingId ? 'Save changes' : 'Add product'}</button>
               </div>
             </form>
           </div>
@@ -2093,7 +2155,7 @@ function AdminSectionProducts({ catalog, onUpdate }: { catalog: Product[]; onUpd
             <p className="mt-2 text-sm text-muted-foreground">This cannot be undone. The product disappears from the storefront immediately.</p>
             <div className="mt-6 flex gap-3">
               <button onClick={() => setDeleteId(null)} className="flex-1 rounded-xl border border-border py-3 text-sm font-bold">Cancel</button>
-              <button onClick={() => { onUpdate(catalog.filter(p => p.id !== deleteId)); setDeleteId(null); }} className="flex-1 rounded-xl bg-red-500 py-3 text-sm font-bold text-white">Delete</button>
+              <button onClick={async () => { await onDelete(deleteId!); setDeleteId(null); }} className="flex-1 rounded-xl bg-red-500 py-3 text-sm font-bold text-white">Delete</button>
             </div>
           </div>
         </div>
@@ -2103,13 +2165,15 @@ function AdminSectionProducts({ catalog, onUpdate }: { catalog: Product[]; onUpd
 }
 
 // ─── Admin · Orders ───────────────────────────────────────────────────────────
-function AdminSectionOrders({ orders, onUpdate }: { orders: OrderRecord[]; onUpdate: (o: OrderRecord[]) => void }) {
+function AdminSectionOrders({ orders, loading, onStatusChange }: {
+  orders: OrderRecord[]; loading: boolean;
+  onStatusChange: (id: string, status: OrderStatus) => Promise<void>;
+}) {
   const [filter, setFilter] = useState<OrderStatus | 'All'>('All');
   const [search, setSearch] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const updateStatus = (id: string, status: OrderStatus) =>
-    onUpdate(orders.map(o => o.id === id ? { ...o, status } : o));
+  const updateStatus = (id: string, status: OrderStatus) => { onStatusChange(id, status); };
 
   const filtered = orders.filter(o =>
     (filter === 'All' || o.status === filter) &&
@@ -2258,27 +2322,44 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
   const [confirmPw, setConfirmPw] = useState('');
   const [showPw, setShowPw] = useState(false);
   const [pwMsg, setPwMsg] = useState('');
-  const [storeInfo, setStoreInfo] = useState<Record<string, string>>(() => {
-    try { return JSON.parse(localStorage.getItem('aggarwal-store-info') || 'null') ?? {}; } catch { return {}; }
-  });
+  const [storeInfo, setStoreInfo] = useState<Record<string, string>>({});
   const [storeMsg, setStoreMsg] = useState('');
   const [dangerMsg, setDangerMsg] = useState('');
   const defaults: Record<string, string> = { name: 'Aggarwal Sweets', address: '12, Hissar Road, Sirsa', phone: '01666234786', hours: '9:00 AM – 9:30 PM' };
   const si = { ...defaults, ...storeInfo };
 
-  const handleChangePw = (e: React.FormEvent) => {
+  // Load settings from DB on mount
+  useEffect(() => {
+    fetch(`${API}/settings`).then(r => r.json()).then(setStoreInfo).catch(() => {});
+  }, []);
+
+  const handleChangePw = async (e: React.FormEvent) => {
     e.preventDefault(); setPwMsg('');
-    if (currentPw !== readAdminPassword()) { setPwMsg('error:Current password is incorrect.'); return; }
     if (newPw.length < 6) { setPwMsg('error:New password must be at least 6 characters.'); return; }
     if (newPw !== confirmPw) { setPwMsg('error:Passwords do not match.'); return; }
-    localStorage.setItem('aggarwal-admin-password', newPw);
+    // Verify current password via server
+    const valid = await apiValidateAdmin(ADMIN_EMAIL, currentPw);
+    if (!valid) { setPwMsg('error:Current password is incorrect.'); return; }
+    await fetch(`${API}/settings/admin_password`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: newPw }),
+    });
     setPwMsg('ok:Password updated!');
     setCurrentPw(''); setNewPw(''); setConfirmPw('');
   };
 
-  const saveStoreInfo = (e: React.FormEvent) => {
+  const saveStoreInfo = async (e: React.FormEvent) => {
     e.preventDefault();
-    localStorage.setItem('aggarwal-store-info', JSON.stringify(si));
+    await Promise.all(
+      Object.entries(si).map(([key, value]) =>
+        fetch(`${API}/settings/${key}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value }),
+        })
+      )
+    );
     setStoreMsg('ok:Store info saved!');
     setTimeout(() => setStoreMsg(''), 3000);
   };
@@ -2356,9 +2437,9 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
         <p className="mt-1 text-sm text-muted-foreground">These actions cannot be undone.</p>
         <div className="mt-4 space-y-3">
           {[
-            { label: 'Clear all orders', desc: 'Removes all order records', action: () => { localStorage.removeItem('aggarwal-orders'); setDangerMsg('ok:Orders cleared.'); } },
-            { label: 'Clear customer list', desc: 'Removes all registered customers', action: () => { localStorage.removeItem('aggarwal-customers'); setDangerMsg('ok:Customers cleared.'); } },
-            { label: 'Reset product catalogue', desc: 'Restores the original product list', action: () => { localStorage.removeItem('aggarwal-catalog'); window.dispatchEvent(new Event('aggarwal-catalog-updated')); setDangerMsg('ok:Catalogue reset to defaults.'); } },
+            { label: 'Clear all orders', desc: 'Removes all order records from DB', action: async () => { await fetch(`${API}/orders/clear`, { method: 'DELETE' }).catch(() => {}); setDangerMsg('ok:Orders cleared.'); } },
+            { label: 'Clear customer list', desc: 'Removes all registered customers from DB', action: async () => { await fetch(`${API}/customers/clear`, { method: 'DELETE' }).catch(() => {}); setDangerMsg('ok:Customers cleared.'); } },
+            { label: 'Reset product catalogue', desc: 'Restores the original product list', action: async () => { await fetch(`${API}/products/reset`, { method: 'POST' }).catch(() => {}); window.dispatchEvent(new Event('aggarwal-catalog-updated')); setDangerMsg('ok:Catalogue reset to defaults. Refresh to see changes.'); } },
           ].map(({ label, desc, action }) => (
             <div key={label} className="flex items-center justify-between rounded-xl border border-border p-4">
               <div>
@@ -2681,7 +2762,7 @@ type ShellRenderProp = (props: ShellChildProps) => React.ReactNode;
 
 // ─── Shared shell (shared cart, auth, overlays) ────────────────────────────────
 function SharedShell({ children }: { children: ShellRenderProp }) {
-  const [catalog, setCatalog] = useState<Product[]>(readCatalog);
+  const [catalog, setCatalog] = useState<Product[]>(products); // static default; API replaces on mount
   const [cart, setCart] = useState<CartLine[]>(() => {
     try { return JSON.parse(localStorage.getItem('aggarwal-cart') || '[]'); } catch { return []; }
   });
@@ -2699,8 +2780,10 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
 
   useEffect(() => { localStorage.setItem('aggarwal-cart', JSON.stringify(cart)); }, [cart]);
   useEffect(() => { localStorage.setItem('aggarwal-wishlist', JSON.stringify(wishlist)); }, [wishlist]);
+  // Fetch catalog from DB on mount; refresh when admin makes changes
   useEffect(() => {
-    const refresh = () => setCatalog(readCatalog());
+    apiFetchCatalog().then(setCatalog).catch(() => {});
+    const refresh = () => apiFetchCatalog().then(setCatalog).catch(() => {});
     window.addEventListener('aggarwal-catalog-updated', refresh);
     return () => window.removeEventListener('aggarwal-catalog-updated', refresh);
   }, []);
@@ -2728,7 +2811,7 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
 
   const handleLogin = (u: AuthUser) => {
     setUser(u);
-    if (u.role !== 'admin') trackCustomer(u);
+    if (u.role !== 'admin') apiTrackCustomer(u);
     if (pendingCheckout) {
       setPendingCheckout(false);
       setAuthOpen(false);
