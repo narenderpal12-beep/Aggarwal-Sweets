@@ -1,0 +1,9 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "2hMKziAQKdR-uYdSQcqHC"
+uri = "file://files/aggarwal_sweets_backup.sql"
+type = "unspecified"
+title = "Aggarwal Sweets — Full DB Backup"
+description = "Plain-SQL pg_dump of all tables (products, orders, customers, reviews, coupons, blog posts, settings, OTP codes). Restore with: psql YOUR_DATABASE_URL < aggarwal_sweets_backup.sql"

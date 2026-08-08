@@ -94,7 +94,7 @@ const allSubItems: NavSubItem[] = navCategories.flatMap(c => c.subs);
 const products: Product[] = [
   {
     id: 'kaju-katli', name: 'Kaju Katli', category: 'Mithai', price: 340, unit: '250 gm',
-    rating: 4.9, reviews: 126, badge: 'Best seller', image: '/product-kaju-katli.jpg',
+    rating: 4.9, reviews: 15, badge: 'Best seller', image: '/product-kaju-katli.jpg',
     description: 'Silky cashew fudge finished with a whisper of silver leaf. Made in small batches for the perfect melt.',
     tags: ['kaju-sweets', 'barfi-halwa', 'festive-specials'],
     variants: [
@@ -105,7 +105,7 @@ const products: Product[] = [
   },
   {
     id: 'motichoor-ladoo', name: 'Motichoor Ladoo', category: 'Mithai', price: 220, unit: '250 gm',
-    rating: 4.8, reviews: 89, badge: 'Festive favourite', image: '/product-motichoor-ladoo.jpg',
+    rating: 4.8, reviews: 10, badge: 'Festive favourite', image: '/product-motichoor-ladoo.jpg',
     description: 'Tiny saffron-hued boondi pearls, slow-cooked and hand-rolled with melon seeds.',
     tags: ['ladoo-laddus', 'festive-specials'],
     variants: [
@@ -116,7 +116,7 @@ const products: Product[] = [
   },
   {
     id: 'pista-barfi', name: 'Pista Barfi', category: 'Mithai', price: 280, unit: '250 gm',
-    rating: 4.7, reviews: 54, image: '/product-pista-barfi.jpg',
+    rating: 4.7, reviews: 8, image: '/product-pista-barfi.jpg',
     description: 'Pistachio, khoya and cardamom layered into a delicate, nutty barfi.',
     tags: ['barfi-halwa', 'milk-sweets'],
     variants: [
@@ -127,7 +127,7 @@ const products: Product[] = [
   },
   {
     id: 'desi-ghee-jalebi', name: 'Desi Ghee Jalebi', category: 'Mithai', price: 150, unit: '250 gm',
-    rating: 4.9, reviews: 72, badge: 'Made today', image: '/product-jalebi.jpg',
+    rating: 4.9, reviews: 9, badge: 'Made today', image: '/product-jalebi.jpg',
     description: 'Crisp spirals soaked in warm saffron syrup. Best enjoyed the same day.',
     tags: ['ghee-sweets', 'festive-specials'],
     variants: [
@@ -137,7 +137,7 @@ const products: Product[] = [
   },
   {
     id: 'aloo-bhujia', name: 'Aloo Bhujia', category: 'Namkeen', price: 95, unit: '200 gm',
-    rating: 4.8, reviews: 108, badge: 'Tea-time hero', image: '/product-aloo-bhujia.jpg',
+    rating: 4.8, reviews: 6, badge: 'Tea-time hero', image: '/product-aloo-bhujia.jpg',
     description: 'Crunchy potato sev with a bright, savoury masala blend — impossible to stop at one handful.',
     tags: ['bhujia-sev'],
     variants: [
@@ -148,7 +148,7 @@ const products: Product[] = [
   },
   {
     id: 'masala-kaju', name: 'Masala Kaju', category: 'Namkeen', price: 190, unit: '150 gm',
-    rating: 4.7, reviews: 43, image: '/product-masala-kaju.jpg',
+    rating: 4.7, reviews: 5, image: '/product-masala-kaju.jpg',
     description: 'Roasted cashews tossed in our house chilli, pepper and amchur seasoning.',
     tags: ['roasted-nuts'],
     variants: [
@@ -159,7 +159,7 @@ const products: Product[] = [
   },
   {
     id: 'mathri', name: 'Ajwain Mathri', category: 'Snacks', price: 120, unit: '250 gm',
-    rating: 4.6, reviews: 38, image: '/product-mathri.jpg',
+    rating: 4.6, reviews: 7, image: '/product-mathri.jpg',
     description: 'Flaky, savoury and gently spiced with ajwain. A Sirsa afternoon ritual.',
     tags: ['mathri-crackers', 'tea-time-snacks', 'spiced-snacks'],
     variants: [
@@ -170,7 +170,7 @@ const products: Product[] = [
   },
   {
     id: 'shagun-box', name: 'Shagun Box · Golden Edit', category: 'Gifting', price: 690, unit: '750 gm',
-    rating: 4.9, reviews: 31, badge: 'Gift ready', image: '/product-shagun-box.jpg',
+    rating: 4.9, reviews: 4, badge: 'Gift ready', image: '/product-shagun-box.jpg',
     description: 'A celebration-ready assortment of kaju katli, ladoo, pista barfi and premium namkeen.',
     tags: ['festival-boxes', 'corporate-gifts', 'personal-gifts'],
     variants: [
@@ -1555,7 +1555,12 @@ function GiftingSection({ products: items, addToCart, shagunProductId }: { produ
   );
 }
 
-function Story() {
+function Story({ catalog }: { catalog: Product[] }) {
+  const totalReviews = catalog.reduce((s, p) => s + p.reviews, 0);
+  const avgRating = catalog.length
+    ? (catalog.reduce((s, p) => s + p.rating * p.reviews, 0) / Math.max(totalReviews, 1)).toFixed(1)
+    : '4.9';
+
   return (
     <section id="story" className="scroll-mt-20 mx-auto grid max-w-7xl gap-12 px-5 py-16 sm:px-8 sm:py-24 lg:grid-cols-[.8fr_1.2fr] lg:items-center">
       <div className="relative mx-auto max-w-sm">
@@ -1570,9 +1575,9 @@ function Story() {
         <h2 className="mt-3 max-w-xl font-display text-4xl font-semibold leading-tight sm:text-5xl">Some recipes are measured in grams. Ours are measured in memories.</h2>
         <p className="mt-6 max-w-lg text-sm leading-7 text-muted-foreground">What started as a small counter in the heart of Sirsa in 1978 still begins the same way: good ingredients, patient hands, and a family member tasting the first batch.</p>
         <div className="mt-8 grid max-w-lg grid-cols-2 gap-5 border-t border-border pt-6 sm:grid-cols-3">
-          <div><p className="font-display text-2xl">1978</p><p className="mt-1 text-[11px] text-muted-foreground">Our first batch</p></div>
-          <div><p className="font-display text-2xl">18</p><p className="mt-1 text-[11px] text-muted-foreground">Recipes we guard</p></div>
-          <div><p className="font-display text-2xl">4.9<span className="text-base">/5</span></p><p className="mt-1 text-[11px] text-muted-foreground">Happy households</p></div>
+          <div><p className="font-display text-2xl">{catalog.length || 8}</p><p className="mt-1 text-[11px] text-muted-foreground">Products available</p></div>
+          <div><p className="font-display text-2xl">{totalReviews || '—'}</p><p className="mt-1 text-[11px] text-muted-foreground">Customer reviews</p></div>
+          <div><p className="font-display text-2xl">{avgRating}<span className="text-base">/5</span></p><p className="mt-1 text-[11px] text-muted-foreground">Average rating</p></div>
         </div>
       </div>
     </section>
@@ -4034,7 +4039,7 @@ function HomePage(props: ShellChildProps) {
       <CategoryRail />
       <ShopSection products={catalog} wishlist={wishlist} onWishlist={onWishlist} onDetail={onDetail} onAdd={onAdd} shagunProductId={shagunProductId} onSetShagun={onSetShagun} />
       <GiftingSection products={catalog} addToCart={onAdd} shagunProductId={shagunProductId} />
-      <Story />
+      <Story catalog={catalog} />
       <Newsletter
         value={newsletter} setValue={setNewsletter} done={newsletterDone}
         onSubmit={e => { e.preventDefault(); if (newsletter.includes('@')) setNewsletterDone(true); }}
