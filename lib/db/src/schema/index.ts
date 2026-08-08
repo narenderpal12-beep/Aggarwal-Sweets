@@ -1,4 +1,4 @@
-import { pgTable, text, integer, real, jsonb, timestamp, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, integer, real, jsonb, timestamp, boolean, serial } from "drizzle-orm/pg-core";
 
 // ─── Products ─────────────────────────────────────────────────────────────────
 export const productsTable = pgTable("products", {
@@ -75,9 +75,20 @@ export const productReviewsTable = pgTable("product_reviews", {
   createdAt:    timestamp("created_at").notNull().defaultNow(),
 });
 
+// ─── OTP Codes ────────────────────────────────────────────────────────────────
+export const otpCodesTable = pgTable("otp_codes", {
+  id:        text("id").primaryKey(),
+  email:     text("email").notNull(),
+  code:      text("code").notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  used:      boolean("used").notNull().default(false),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
 export type DbProduct       = typeof productsTable.$inferSelect;
 export type DbOrder         = typeof ordersTable.$inferSelect;
 export type DbCustomer      = typeof customersTable.$inferSelect;
 export type DbBlogPost      = typeof blogPostsTable.$inferSelect;
 export type DbCoupon        = typeof couponCodesTable.$inferSelect;
 export type DbProductReview = typeof productReviewsTable.$inferSelect;
+export type DbOtpCode       = typeof otpCodesTable.$inferSelect;

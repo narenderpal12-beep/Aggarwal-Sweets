@@ -34,6 +34,7 @@ type OrderStatus = 'Confirmed' | 'Packing' | 'Out for delivery' | 'Delivered';
 type OrderRecord = {
   id: string; date: string; items: CartLine[]; subtotal: number;
   status: OrderStatus; address: string; phone: string;
+  customerEmail?: string;
 };
 type BlogPost = {
   id: string; slug: string; title: string; excerpt: string;
@@ -320,6 +321,30 @@ async function apiSaveOrderToDb(order: OrderRecord): Promise<void> {
   } catch { /* non-fatal — customer still sees their order in localStorage */ }
 }
 
+async function apiSendOtp(email: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const r = await fetch(`${API}/auth/otp/send`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    const data = await r.json();
+    if (!r.ok) return { success: false, error: data.error ?? 'Failed to send OTP' };
+    return { success: true };
+  } catch { return { success: false, error: 'Network error. Please try again.' }; }
+}
+
+async function apiVerifyOtp(email: string, code: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const r = await fetch(`${API}/auth/otp/verify`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, code }),
+    });
+    const data = await r.json();
+    if (!r.ok) return { success: false, error: data.error ?? 'Incorrect OTP' };
+    return { success: true };
+  } catch { return { success: false, error: 'Network error. Please try again.' }; }
+}
+
 async function apiTrackCustomer(user: AuthUser): Promise<void> {
   try {
     await fetch(`${API}/customers`, {
@@ -387,11 +412,10 @@ function AuthModal({ onClose, onLogin }: { onClose: () => void; onLogin: (user: 
   const [step, setStep] = useState<AuthStep>('email');
   const [email, setEmail] = useState('');
   const [otp, setOtp] = useState('');
-  const [sentOtp] = useState(() => Math.floor(100000 + Math.random() * 900000).toString());
   const [otpError, setOtpError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const sendOtp = (e: React.FormEvent) => {
+  const sendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email.includes('@')) return;
     if (email.toLowerCase() === ADMIN_EMAIL) {
@@ -399,24 +423,30 @@ function AuthModal({ onClose, onLogin }: { onClose: () => void; onLogin: (user: 
       return;
     }
     setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
+    setOtpError('');
+    const result = await apiSendOtp(email.toLowerCase().trim());
+    setLoading(false);
+    if (result.success) {
       setStep('otp');
-      // In a real app, send OTP via API. For demo: alert shows it.
-      console.info(`[demo] OTP for ${email}: ${sentOtp}`);
-    }, 1200);
+    } else {
+      setOtpError(result.error ?? 'Failed to send OTP');
+    }
   };
 
-  const verifyOtp = (e: React.FormEvent) => {
+  const verifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (otp === sentOtp || otp === '123456') {
-      const user: AuthUser = { email, role: 'customer' };
+    setLoading(true);
+    setOtpError('');
+    const result = await apiVerifyOtp(email.toLowerCase().trim(), otp.trim());
+    setLoading(false);
+    if (result.success) {
+      const user: AuthUser = { email: email.toLowerCase().trim(), role: 'customer' };
       localStorage.setItem('aggarwal-user', JSON.stringify(user));
       onLogin(user);
       setStep('done');
       setTimeout(onClose, 1500);
     } else {
-      setOtpError('Incorrect OTP. Please try again.');
+      setOtpError(result.error ?? 'Incorrect OTP. Please try again.');
     }
   };
 
@@ -1744,7 +1774,7 @@ function CartDrawer({ cart, subtotal, updateQty, onClose, onCheckout, user, onAu
 }
 
 // ─── Checkout ─────────────────────────────────────────────────────────────────
-function Checkout({ subtotal, cart, onClose, onDone }: { subtotal: number; cart: CartLine[]; onClose: () => void; onDone: (order: OrderRecord) => void }) {
+function Checkout({ subtotal, cart, onClose, onDone, user }: { subtotal: number; cart: CartLine[]; onClose: () => void; onDone: (order: OrderRecord) => void; user: AuthUser | null }) {
   const [submitted, setSubmitted] = useState(false);
   const [orderId] = useState(() => `AGS-${Math.floor(1000 + Math.random() * 8999)}`);
   const [orderRef, setOrderRef] = useState<OrderRecord | null>(null);
@@ -1762,8 +1792,9 @@ function Checkout({ subtotal, cart, onClose, onDone }: { subtotal: number; cart:
       status: 'Confirmed',
       address,
       phone,
+      customerEmail: user?.role === 'customer' ? user.email : undefined,
     };
-    // Save locally (customer account view) and persist to DB (admin view)
+    // Save locally (customer account view) and persist to DB (admin view, triggers emails)
     saveOrderLocal(order);
     apiSaveOrderToDb(order);
     setOrderRef(order);
@@ -3916,6 +3947,7 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
             subtotal={finalTotal} cart={cart}
             onClose={() => setCheckout(false)}
             onDone={(_order) => { setCheckout(false); setOrdered(true); setCart([]); setCoupon(null); }}
+            user={user}
           />
         )}
         {ordered && <OrderConfirmation onClose={() => setOrdered(false)} />}

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { db, ordersTable } from "@workspace/db";
 import { eq, desc } from "drizzle-orm";
+import { sendOrderEmails } from "../lib/email.js";
 
 const router = Router();
 
@@ -15,6 +16,11 @@ router.get("/orders", async (_req, res) => {
 router.post("/orders", async (req, res) => {
   const [order] = await db.insert(ordersTable).values(req.body).returning();
   res.status(201).json(order);
+
+  // Send confirmation emails asynchronously (non-blocking)
+  sendOrderEmails(req.body).catch((err) =>
+    console.error("Failed to send order emails:", err)
+  );
 });
 
 router.put("/orders/:id/status", async (req, res) => {

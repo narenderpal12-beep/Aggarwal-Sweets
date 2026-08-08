@@ -12,10 +12,10 @@ paths = [ "/" ]
 localPort = 20108
 
 [services.development]
-run = "pnpm --filter @workspace/aggarwal-sweets run dev"
+run = "npm run dev --workspace=@workspace/aggarwal-sweets"
 
 [services.production]
-build = [ "pnpm", "--filter", "@workspace/aggarwal-sweets", "run", "build" ]
+build = [ "npm", "run", "build", "--workspace=@workspace/aggarwal-sweets" ]
 serve = "static"
 publicDir = "artifacts/aggarwal-sweets/dist/public"
 
