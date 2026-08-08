@@ -6,8 +6,6 @@ const ADMIN_EMAIL = GMAIL_USER; // same inbox receives all admin notifications
 
 export const isEmailConfigured = () => Boolean(GMAIL_USER && GMAIL_PASS);
 
-// Startup diagnostics — masks the password, never logs the real value
-console.info(`[email] GMAIL_USER="${GMAIL_USER}" GMAIL_APP_PASSWORD length=${GMAIL_PASS.length} configured=${isEmailConfigured()}`);
 
 const transporter = nodemailer.createTransport({
   service: "gmail",
