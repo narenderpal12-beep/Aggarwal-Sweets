@@ -9,7 +9,8 @@ import {
   PackageCheck, Phone, Plus, Search, ShoppingBag, Sparkles, Star, Store, Truck,
   UserRound, X, ShieldCheck, SlidersHorizontal, LayoutDashboard, Mail, MapPin,
   Trash2, Wheat, CircleAlert, LogIn, KeyRound, BookOpen, Send, MessageCircle,
-  Package, ListOrdered, Settings, Home, ChevronRight as Chevron, Lock, RotateCcw, FlaskConical
+  Package, ListOrdered, Settings, Home, ChevronRight as Chevron, Lock, RotateCcw, FlaskConical,
+  LogOut, Eye, EyeOff, Pencil, RefreshCw, Users, Loader2
 } from 'lucide-react';
 import NotFound from '@/pages/not-found';
 
@@ -24,7 +25,8 @@ type Product = {
   variants: ProductVariant[]; tags?: string[];
 };
 type CartLine = { product: Product; variant: ProductVariant; quantity: number };
-type AuthUser = { email: string; name?: string };
+type AuthUser = { email: string; name?: string; role?: 'customer' | 'admin' };
+type CustomerRecord = { email: string; name?: string; joinedAt: string };
 type OrderStatus = 'Confirmed' | 'Packing' | 'Out for delivery' | 'Delivered';
 type OrderRecord = {
   id: string; date: string; items: CartLine[]; subtotal: number;
@@ -288,6 +290,31 @@ function saveOrder(order: OrderRecord) {
   const orders = readOrders();
   localStorage.setItem('aggarwal-orders', JSON.stringify([order, ...orders]));
 }
+function writeOrders(orders: OrderRecord[]) {
+  localStorage.setItem('aggarwal-orders', JSON.stringify(orders));
+}
+function writeCatalog(products: Product[]) {
+  localStorage.setItem('aggarwal-catalog', JSON.stringify(products));
+  window.dispatchEvent(new Event('aggarwal-catalog-updated'));
+}
+function readCustomers(): CustomerRecord[] {
+  try { return JSON.parse(localStorage.getItem('aggarwal-customers') || '[]'); } catch { return []; }
+}
+function trackCustomer(user: AuthUser) {
+  const list = readCustomers();
+  if (!list.find(c => c.email === user.email)) {
+    localStorage.setItem('aggarwal-customers', JSON.stringify([
+      ...list,
+      { email: user.email, name: user.name, joinedAt: new Date().toISOString() }
+    ]));
+  }
+}
+function readAdminPassword(): string {
+  return localStorage.getItem('aggarwal-admin-password') || 'Admin@123';
+}
+
+const ADMIN_EMAIL = 'admin@aggarwalsweets.in';
+type AdminSection = 'dashboard' | 'products' | 'orders' | 'customers' | 'settings';
 
 // ─── Auth Modal ───────────────────────────────────────────────────────────────
 type AuthStep = 'email' | 'otp' | 'done';
@@ -303,6 +330,10 @@ function AuthModal({ onClose, onLogin }: { onClose: () => void; onLogin: (user: 
   const sendOtp = (e: React.FormEvent) => {
     e.preventDefault();
     if (!email.includes('@')) return;
+    if (email.toLowerCase() === ADMIN_EMAIL) {
+      setOtpError('This is the admin account. Please sign in at /admin.');
+      return;
+    }
     setLoading(true);
     setTimeout(() => {
       setLoading(false);
@@ -315,7 +346,7 @@ function AuthModal({ onClose, onLogin }: { onClose: () => void; onLogin: (user: 
   const verifyOtp = (e: React.FormEvent) => {
     e.preventDefault();
     if (otp === sentOtp || otp === '123456') {
-      const user: AuthUser = { email };
+      const user: AuthUser = { email, role: 'customer' };
       localStorage.setItem('aggarwal-user', JSON.stringify(user));
       onLogin(user);
       setStep('done');
@@ -1584,66 +1615,777 @@ function OrderConfirmation({ onClose }: { onClose: () => void }) {
 }
 
 // ─── Admin Page ───────────────────────────────────────────────────────────────
-function AdminPage() {
-  const [, setLocation] = useLocation();
+// ─── Admin Login Screen ───────────────────────────────────────────────────────
+function AdminLoginScreen({ onLogin }: { onLogin: (u: AuthUser) => void }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [showPw, setShowPw] = useState(false);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true); setError('');
+    setTimeout(() => {
+      setLoading(false);
+      if (email.toLowerCase() === ADMIN_EMAIL && password === readAdminPassword()) {
+        const u: AuthUser = { email: ADMIN_EMAIL, role: 'admin', name: 'Admin' };
+        localStorage.setItem('aggarwal-user', JSON.stringify(u));
+        onLogin(u);
+      } else {
+        setError('Invalid credentials. Please check and try again.');
+      }
+    }, 900);
+  };
+
   return (
-    <div className="min-h-[100dvh] bg-primary text-primary-foreground">
-      <div className="mx-auto max-w-7xl px-5 py-6 sm:px-8">
-        <div className="flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-3" data-testid="link-admin-home">
-            <div className="grid size-10 place-items-center rounded-full border-2 border-accent text-accent"><Sparkles className="size-5" /></div>
-            <div><div className="font-display text-xl">Aggarwal</div><div className="font-mono-ui text-[9px] uppercase tracking-widest text-accent">Owner workspace</div></div>
-          </Link>
-          <button onClick={() => setLocation('/')} className="inline-flex items-center gap-2 rounded-full border border-primary-foreground/20 px-4 py-2 text-xs font-bold" data-testid="button-exit-admin">
-            <Store className="size-3.5" /> View storefront
-          </button>
-        </div>
-        <div className="grid gap-10 py-16 lg:grid-cols-[.8fr_1.2fr] lg:items-center">
+    <div className="flex min-h-[100dvh] flex-col items-center justify-center bg-primary p-5 text-primary-foreground">
+      <Link href="/" className="mb-10 flex items-center gap-3">
+        <div className="grid size-10 place-items-center rounded-full border-2 border-accent text-accent"><Sparkles className="size-5" /></div>
+        <div><div className="font-display text-xl">Aggarwal</div><div className="font-mono-ui text-[9px] uppercase tracking-widest text-accent">Owner workspace</div></div>
+      </Link>
+      <div className="w-full max-w-sm rounded-3xl border border-primary-foreground/15 bg-primary-foreground/8 p-8 shadow-2xl">
+        <h2 className="text-center font-display text-3xl">Admin Sign In</h2>
+        <p className="mt-1.5 text-center text-sm text-primary-foreground/55">Restricted to store owners only.</p>
+        <form onSubmit={handleSubmit} className="mt-8 space-y-4" data-testid="form-admin-login">
           <div>
-            <p className="font-mono-ui text-[10px] uppercase tracking-[.25em] text-accent">Owner portal</p>
-            <h1 className="mt-4 font-display text-5xl leading-tight sm:text-6xl">Your sweet shop,<br /><em className="font-normal text-accent">at a glance.</em></h1>
-            <p className="mt-6 max-w-md text-sm leading-7 text-primary-foreground/65">A home for the people behind the counter. Track orders, keep the catalogue fresh, and see what Sirsa is loving today.</p>
-            <div className="mt-8 flex flex-wrap gap-3">
-              <button className="rounded-full bg-accent px-5 py-3 text-xs font-bold text-accent-foreground" data-testid="button-admin-signin">Sign in to dashboard</button>
-              <Link href="/" className="rounded-full border border-primary-foreground/25 px-5 py-3 text-xs font-bold" data-testid="link-admin-storefront">Explore storefront</Link>
+            <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-primary-foreground/70">Email address</label>
+            <input type="email" required value={email} onChange={e => setEmail(e.target.value)}
+              placeholder="admin@aggarwalsweets.in" data-testid="input-admin-email"
+              className="w-full rounded-xl border border-primary-foreground/20 bg-primary-foreground/5 px-4 py-3 text-sm text-primary-foreground placeholder:text-primary-foreground/30 outline-none focus:ring-2 focus:ring-accent" />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-primary-foreground/70">Password</label>
+            <div className="relative">
+              <input type={showPw ? 'text' : 'password'} required value={password} onChange={e => setPassword(e.target.value)}
+                placeholder="••••••••" data-testid="input-admin-password"
+                className="w-full rounded-xl border border-primary-foreground/20 bg-primary-foreground/5 px-4 py-3 pr-11 text-sm text-primary-foreground placeholder:text-primary-foreground/30 outline-none focus:ring-2 focus:ring-accent" />
+              <button type="button" onClick={() => setShowPw(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-primary-foreground/40 hover:text-primary-foreground">
+                {showPw ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+              </button>
             </div>
           </div>
-          <div className="rounded-3xl border border-primary-foreground/15 bg-primary-foreground/5 p-4 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-primary-foreground/10 px-3 pb-4">
-              <span className="font-display text-xl">Good morning, Aggarwal family</span>
-              <span className="rounded-full bg-accent px-2 py-1 font-mono-ui text-[9px] font-bold text-accent-foreground">LIVE PREVIEW</span>
+          {error && <p className="rounded-xl bg-red-500/20 px-4 py-2.5 text-xs font-bold text-red-300">{error}</p>}
+          <button type="submit" disabled={loading} data-testid="button-admin-login"
+            className="flex w-full items-center justify-center gap-2 rounded-full bg-accent py-3.5 text-sm font-bold text-accent-foreground disabled:opacity-60">
+            {loading ? <Loader2 className="size-4 animate-spin" /> : <LogIn className="size-4" />}
+            {loading ? 'Signing in…' : 'Sign in to dashboard'}
+          </button>
+        </form>
+        <div className="mt-6 rounded-xl border border-primary-foreground/15 bg-primary-foreground/5 p-4 text-center">
+          <p className="font-mono-ui text-[10px] uppercase tracking-wider text-accent">Demo credentials</p>
+          <p className="mt-2 text-xs text-primary-foreground/70">Email: <span className="font-bold text-primary-foreground">admin@aggarwalsweets.in</span></p>
+          <p className="text-xs text-primary-foreground/70">Password: <span className="font-bold text-primary-foreground">Admin@123</span></p>
+        </div>
+      </div>
+      <Link href="/" className="mt-6 text-xs text-primary-foreground/45 hover:text-primary-foreground/80">← Back to storefront</Link>
+    </div>
+  );
+}
+
+// ─── Admin Dashboard Shell ────────────────────────────────────────────────────
+function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout: () => void }) {
+  const [section, setSection] = useState<AdminSection>('dashboard');
+  const [catalog, setCatalog] = useState<Product[]>(readCatalog);
+  const [orders, setOrders] = useState<OrderRecord[]>(readOrders);
+  const [customers, setCustomers] = useState<CustomerRecord[]>(readCustomers);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  const refreshAll = () => { setCatalog(readCatalog()); setOrders(readOrders()); setCustomers(readCustomers()); };
+
+  const updateCatalog = (p: Product[]) => { writeCatalog(p); setCatalog(p); };
+  const updateOrders = (o: OrderRecord[]) => { writeOrders(o); setOrders(o); };
+
+  const navItems: { key: AdminSection; icon: typeof LayoutDashboard; label: string }[] = [
+    { key: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+    { key: 'products',  icon: Package,         label: 'Products' },
+    { key: 'orders',    icon: ShoppingBag,     label: 'Orders' },
+    { key: 'customers', icon: Users,           label: 'Customers' },
+    { key: 'settings',  icon: Settings,        label: 'Settings' },
+  ];
+
+  const navigate = (s: AdminSection) => { setSection(s); setMobileNavOpen(false); };
+
+  return (
+    <div className="flex min-h-[100dvh]">
+      {/* Desktop Sidebar */}
+      <aside className="hidden w-60 flex-col border-r border-primary-foreground/10 bg-primary lg:flex">
+        <div className="flex items-center gap-3 border-b border-primary-foreground/10 px-6 py-5">
+          <div className="grid size-9 place-items-center rounded-full border-2 border-accent text-accent"><Sparkles className="size-4" /></div>
+          <div><div className="font-display text-base text-primary-foreground">Aggarwal</div><div className="font-mono-ui text-[8px] uppercase tracking-widest text-accent">Admin portal</div></div>
+        </div>
+        <nav className="flex-1 space-y-1 p-3">
+          {navItems.map(({ key, icon: Icon, label }) => (
+            <button key={key} onClick={() => navigate(key)}
+              className={`flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-semibold transition-colors ${section === key ? 'bg-accent text-accent-foreground' : 'text-primary-foreground/60 hover:bg-primary-foreground/10 hover:text-primary-foreground'}`}
+              data-testid={`admin-nav-${key}`}>
+              <Icon className="size-4 shrink-0" /> {label}
+            </button>
+          ))}
+        </nav>
+        <div className="space-y-1 border-t border-primary-foreground/10 p-3">
+          <Link href="/" className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-semibold text-primary-foreground/60 hover:bg-primary-foreground/10 hover:text-primary-foreground">
+            <Store className="size-4 shrink-0" /> View storefront
+          </Link>
+          <button onClick={onLogout} className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-semibold text-red-400 hover:bg-red-500/10" data-testid="button-admin-logout">
+            <LogOut className="size-4 shrink-0" /> Sign out
+          </button>
+        </div>
+      </aside>
+
+      {/* Main */}
+      <div className="flex flex-1 flex-col overflow-hidden">
+        {/* Top bar */}
+        <header className="flex items-center justify-between border-b border-primary-foreground/10 bg-primary px-5 py-4">
+          <div className="flex items-center gap-3">
+            <button onClick={() => setMobileNavOpen(v => !v)} className="grid size-9 place-items-center rounded-full border border-primary-foreground/20 text-primary-foreground lg:hidden">
+              <Menu className="size-4" />
+            </button>
+            <div>
+              <h1 className="font-display text-lg capitalize text-primary-foreground">{section}</h1>
+              <p className="hidden text-xs text-primary-foreground/45 sm:block">Welcome back, {adminUser.name ?? adminUser.email}</p>
             </div>
-            <div className="grid gap-3 py-4 sm:grid-cols-3">
-              <div className="rounded-2xl bg-accent p-4 text-accent-foreground">
-                <p className="text-[10px] font-bold uppercase tracking-wider">Today's orders</p>
-                <p className="mt-4 font-display text-4xl">28</p>
-                <p className="mt-1 text-xs opacity-70">+6 since yesterday</p>
-              </div>
-              <div className="rounded-2xl bg-primary-foreground/10 p-4">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-primary-foreground/50">Counter sales</p>
-                <p className="mt-4 font-display text-4xl">₹18.4k</p>
-                <p className="mt-1 text-xs text-primary-foreground/50">This week</p>
-              </div>
-              <div className="rounded-2xl bg-primary-foreground/10 p-4">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-primary-foreground/50">Top sweet</p>
-                <p className="mt-4 font-display text-2xl">Kaju Katli</p>
-                <p className="mt-1 text-xs text-primary-foreground/50">126 orders</p>
-              </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={refreshAll} title="Refresh data" className="grid size-9 place-items-center rounded-full border border-primary-foreground/20 text-primary-foreground/60 hover:bg-primary-foreground/10 hover:text-primary-foreground">
+              <RefreshCw className="size-4" />
+            </button>
+            <div className="flex items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3 py-1.5">
+              <div className="size-2 rounded-full bg-accent" />
+              <span className="font-mono-ui text-[10px] font-bold uppercase tracking-wider text-accent">Admin</span>
             </div>
-            <div className="rounded-2xl bg-primary-foreground/10 p-4">
-              <div className="flex items-center justify-between text-xs"><span className="font-bold">Recent orders</span><span className="text-accent">View all</span></div>
-              {['#AGS-2841 · Shagun Box', '#AGS-2840 · Motichoor Ladoo', '#AGS-2839 · Aloo Bhujia'].map((item, i) => (
-                <div key={item} className="flex items-center justify-between border-b border-primary-foreground/10 py-3 text-xs last:border-0">
-                  <span className="text-primary-foreground/70">{item}</span>
-                  <span className="flex items-center gap-1.5 text-accent"><BadgeCheck className="size-3.5" /> {i === 0 ? 'Packing' : 'Confirmed'}</span>
+          </div>
+        </header>
+
+        {/* Mobile slide-over nav */}
+        {mobileNavOpen && (
+          <div className="absolute inset-0 z-50 flex lg:hidden" onMouseDown={() => setMobileNavOpen(false)}>
+            <aside className="flex h-full w-64 flex-col bg-primary shadow-2xl" onMouseDown={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between border-b border-primary-foreground/10 px-5 py-4">
+                <span className="font-display text-lg text-primary-foreground">Menu</span>
+                <button onClick={() => setMobileNavOpen(false)} className="text-primary-foreground/60"><X className="size-5" /></button>
+              </div>
+              <nav className="flex-1 space-y-1 p-3">
+                {navItems.map(({ key, icon: Icon, label }) => (
+                  <button key={key} onClick={() => navigate(key)}
+                    className={`flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-semibold transition-colors ${section === key ? 'bg-accent text-accent-foreground' : 'text-primary-foreground/60 hover:bg-primary-foreground/10 hover:text-primary-foreground'}`}>
+                    <Icon className="size-4 shrink-0" /> {label}
+                  </button>
+                ))}
+              </nav>
+              <div className="space-y-1 border-t border-primary-foreground/10 p-3">
+                <Link href="/" className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-semibold text-primary-foreground/60 hover:bg-primary-foreground/10 hover:text-primary-foreground" onClick={() => setMobileNavOpen(false)}>
+                  <Store className="size-4 shrink-0" /> View storefront
+                </Link>
+                <button onClick={onLogout} className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-semibold text-red-400 hover:bg-red-500/10">
+                  <LogOut className="size-4 shrink-0" /> Sign out
+                </button>
+              </div>
+            </aside>
+          </div>
+        )}
+
+        {/* Section content */}
+        <main className="flex-1 overflow-auto bg-[#f8f5f0] p-5 sm:p-7">
+          {section === 'dashboard' && <AdminSectionDashboard catalog={catalog} orders={orders} customers={customers} onNavigate={setSection} />}
+          {section === 'products'  && <AdminSectionProducts  catalog={catalog}  onUpdate={updateCatalog} />}
+          {section === 'orders'    && <AdminSectionOrders    orders={orders}    onUpdate={updateOrders} />}
+          {section === 'customers' && <AdminSectionCustomers customers={customers} />}
+          {section === 'settings'  && <AdminSectionSettings  adminUser={adminUser} />}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+// ─── Admin · Dashboard ────────────────────────────────────────────────────────
+function AdminSectionDashboard({ catalog, orders, customers, onNavigate }: {
+  catalog: Product[]; orders: OrderRecord[]; customers: CustomerRecord[];
+  onNavigate: (s: AdminSection) => void;
+}) {
+  const totalRevenue = orders.reduce((s, o) => s + o.subtotal, 0);
+  const activeOrders = orders.filter(o => o.status !== 'Delivered').length;
+
+  const stats = [
+    { label: 'Total orders',  value: String(orders.length),    sub: `${activeOrders} active`,      icon: ShoppingBag, accent: 'bg-blue-500' },
+    { label: 'Revenue',       value: money(totalRevenue),      sub: 'All time',                    icon: Banknote,    accent: 'bg-emerald-500' },
+    { label: 'Products',      value: String(catalog.length),   sub: 'In catalogue',                icon: Package,     accent: 'bg-amber-500' },
+    { label: 'Customers',     value: String(customers.length), sub: 'Registered',                  icon: Users,       accent: 'bg-purple-500' },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {stats.map(({ label, value, sub, icon: Icon, accent }) => (
+          <div key={label} className="rounded-2xl border border-border bg-background p-5 shadow-sm">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">{label}</p>
+              <div className={`grid size-9 place-items-center rounded-xl ${accent} text-white`}><Icon className="size-4" /></div>
+            </div>
+            <p className="mt-3 font-display text-3xl">{value}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{sub}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-[1.5fr_.5fr]">
+        {/* Recent orders */}
+        <div className="rounded-2xl border border-border bg-background shadow-sm">
+          <div className="flex items-center justify-between border-b border-border px-5 py-4">
+            <h3 className="font-semibold">Recent Orders</h3>
+            <button onClick={() => onNavigate('orders')} className="text-xs font-bold text-secondary hover:underline">View all →</button>
+          </div>
+          {orders.length === 0 ? (
+            <div className="py-14 text-center">
+              <ShoppingBag className="mx-auto size-8 text-muted-foreground/40" />
+              <p className="mt-3 text-sm text-muted-foreground">No orders yet. They will appear here after customers check out.</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-border">
+              {orders.slice(0, 7).map(order => (
+                <div key={order.id} className="flex items-center justify-between px-5 py-3.5">
+                  <div>
+                    <p className="text-sm font-semibold">{order.id}</p>
+                    <p className="text-xs text-muted-foreground">{order.date} · {order.items.length} item{order.items.length !== 1 ? 's' : ''} · {order.phone}</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <p className="text-sm font-bold">{money(order.subtotal)}</p>
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold whitespace-nowrap ${ORDER_STATUSES[order.status].color}`}>{ORDER_STATUSES[order.status].label}</span>
+                  </div>
                 </div>
               ))}
             </div>
+          )}
+        </div>
+
+        {/* Top products */}
+        <div className="rounded-2xl border border-border bg-background shadow-sm">
+          <div className="border-b border-border px-5 py-4">
+            <h3 className="font-semibold">Catalogue</h3>
+          </div>
+          <div className="divide-y divide-border">
+            {catalog.slice(0, 6).map(p => (
+              <div key={p.id} className="flex items-center gap-3 px-5 py-3">
+                <img src={p.image} className="size-9 rounded-xl object-cover" alt={p.name} />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold">{p.name}</p>
+                  <p className="text-xs text-muted-foreground">{p.category}</p>
+                </div>
+                <p className="text-sm font-bold">{money(p.price)}</p>
+              </div>
+            ))}
+          </div>
+          <div className="border-t border-border px-5 py-3">
+            <button onClick={() => onNavigate('products')} className="text-xs font-bold text-secondary hover:underline">Manage products →</button>
           </div>
         </div>
       </div>
     </div>
   );
+}
+
+// ─── Admin · Products ─────────────────────────────────────────────────────────
+type ProductFormData = {
+  name: string; category: Exclude<Category, 'All'>; price: string; unit: string;
+  badge: string; description: string; image: string;
+  v1w: string; v1p: string; v2w: string; v2p: string; v3w: string; v3p: string;
+};
+const BLANK_FORM: ProductFormData = {
+  name: '', category: 'Mithai', price: '', unit: '250 gm',
+  badge: '', description: '', image: '/hero-mithai.jpg',
+  v1w: '250 gm', v1p: '', v2w: '500 gm', v2p: '', v3w: '1 kg', v3p: '',
+};
+
+function AdminSectionProducts({ catalog, onUpdate }: { catalog: Product[]; onUpdate: (p: Product[]) => void }) {
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState<ProductFormData>(BLANK_FORM);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [filterCat, setFilterCat] = useState<Category>('All');
+
+  const openAdd = () => { setForm(BLANK_FORM); setEditingId(null); setModalOpen(true); };
+  const openEdit = (p: Product) => {
+    setForm({
+      name: p.name, category: p.category, price: String(p.price), unit: p.unit,
+      badge: p.badge ?? '', description: p.description, image: p.image,
+      v1w: p.variants[0]?.weight ?? '', v1p: String(p.variants[0]?.price ?? ''),
+      v2w: p.variants[1]?.weight ?? '', v2p: String(p.variants[1]?.price ?? ''),
+      v3w: p.variants[2]?.weight ?? '', v3p: String(p.variants[2]?.price ?? ''),
+    });
+    setEditingId(p.id); setModalOpen(true);
+  };
+  const f = (field: keyof ProductFormData) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
+    setForm(prev => ({ ...prev, [field]: e.target.value }));
+
+  const handleSave = (e: React.FormEvent) => {
+    e.preventDefault();
+    const buildVariant = (w: string, p: string): ProductVariant[] =>
+      w && p ? [{ material: 'Standard', weight: w, price: Number(p) }] : [];
+    const variants = [
+      ...buildVariant(form.v1w, form.v1p),
+      ...buildVariant(form.v2w, form.v2p),
+      ...buildVariant(form.v3w, form.v3p),
+    ];
+    if (variants.length === 0) variants.push({ material: 'Standard', weight: form.unit, price: Number(form.price) });
+    const existing = editingId ? catalog.find(p => p.id === editingId) : undefined;
+    const product: Product = {
+      id: editingId ?? form.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''),
+      name: form.name, category: form.category,
+      price: Number(form.price) || (variants[0]?.price ?? 0),
+      unit: form.unit, badge: form.badge || undefined,
+      description: form.description, image: form.image,
+      rating: existing?.rating ?? 4.5, reviews: existing?.reviews ?? 0,
+      variants, tags: existing?.tags ?? [],
+    };
+    onUpdate(editingId ? catalog.map(p => p.id === editingId ? product : p) : [...catalog, product]);
+    setModalOpen(false);
+  };
+
+  const filtered = catalog.filter(p =>
+    (filterCat === 'All' || p.category === filterCat) &&
+    (p.name.toLowerCase().includes(search.toLowerCase()) || p.category.toLowerCase().includes(search.toLowerCase()))
+  );
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2 rounded-xl border border-border bg-background px-4 py-2.5 shadow-sm">
+            <Search className="size-4 text-muted-foreground" />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search…" className="w-36 bg-transparent text-sm outline-none" />
+          </div>
+          <div className="flex gap-1.5">
+            {(['All', 'Mithai', 'Namkeen', 'Snacks', 'Gifting'] as Category[]).map(c => (
+              <button key={c} onClick={() => setFilterCat(c)}
+                className={`rounded-full px-3 py-1.5 text-xs font-bold transition-colors ${filterCat === c ? 'bg-primary text-primary-foreground' : 'border border-border bg-background hover:bg-muted'}`}>
+                {c}
+              </button>
+            ))}
+          </div>
+        </div>
+        <button onClick={openAdd} className="flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-bold text-primary-foreground shadow-sm" data-testid="button-admin-add-product">
+          <Plus className="size-4" /> Add product
+        </button>
+      </div>
+
+      <div className="overflow-hidden rounded-2xl border border-border bg-background shadow-sm">
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-border bg-muted/40">
+                {['Product', 'Category', 'Price', 'Variants', 'Badge', 'Actions'].map(h => (
+                  <th key={h} className="whitespace-nowrap px-5 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-muted-foreground">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {filtered.map(p => (
+                <tr key={p.id} className="transition-colors hover:bg-muted/30">
+                  <td className="px-5 py-3">
+                    <div className="flex items-center gap-3">
+                      <img src={p.image} alt={p.name} className="size-11 rounded-xl object-cover" />
+                      <div>
+                        <p className="font-semibold">{p.name}</p>
+                        <p className="text-xs text-muted-foreground">{p.unit}</p>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-5 py-3 text-sm text-muted-foreground">{p.category}</td>
+                  <td className="px-5 py-3 text-sm font-bold">{money(p.price)}</td>
+                  <td className="px-5 py-3 text-sm text-muted-foreground">{p.variants.length} variant{p.variants.length !== 1 ? 's' : ''}</td>
+                  <td className="px-5 py-3">
+                    {p.badge
+                      ? <span className="rounded-full bg-accent px-2 py-0.5 text-[10px] font-bold text-accent-foreground">{p.badge}</span>
+                      : <span className="text-xs text-muted-foreground">—</span>}
+                  </td>
+                  <td className="px-5 py-3">
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => openEdit(p)} title="Edit" className="grid size-8 place-items-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" data-testid={`button-edit-${p.id}`}><Pencil className="size-3.5" /></button>
+                      <button onClick={() => setDeleteId(p.id)} title="Delete" className="grid size-8 place-items-center rounded-lg border border-red-200 text-red-400 transition-colors hover:bg-red-50" data-testid={`button-delete-${p.id}`}><Trash2 className="size-3.5" /></button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {filtered.length === 0 && <p className="py-12 text-center text-sm text-muted-foreground">No products found.</p>}
+        </div>
+      </div>
+      <p className="text-xs text-muted-foreground">{filtered.length} of {catalog.length} product{catalog.length !== 1 ? 's' : ''}</p>
+
+      {/* Add / Edit Modal */}
+      {modalOpen && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-5 backdrop-blur-sm" onMouseDown={() => setModalOpen(false)}>
+          <div className="max-h-[92vh] w-full max-w-xl overflow-y-auto rounded-3xl bg-background shadow-2xl" onMouseDown={e => e.stopPropagation()}>
+            <div className="sticky top-0 flex items-center justify-between border-b border-border bg-background px-6 py-4">
+              <h3 className="font-display text-xl">{editingId ? 'Edit product' : 'Add product'}</h3>
+              <button onClick={() => setModalOpen(false)} className="grid size-8 place-items-center rounded-full hover:bg-muted"><X className="size-4" /></button>
+            </div>
+            <form onSubmit={handleSave} className="space-y-4 px-6 py-5">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Name *</label>
+                  <input required value={form.name} onChange={f('name')} placeholder="Product name" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Category *</label>
+                  <select required value={form.category} onChange={f('category')} className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring">
+                    {(['Mithai', 'Namkeen', 'Snacks', 'Gifting'] as const).map(c => <option key={c}>{c}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Base price (₹) *</label>
+                  <input required type="number" min="1" value={form.price} onChange={f('price')} placeholder="340" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Unit</label>
+                  <input value={form.unit} onChange={f('unit')} placeholder="250 gm" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                </div>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Badge (optional)</label>
+                  <input value={form.badge} onChange={f('badge')} placeholder="Best seller" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Image</label>
+                  <select value={form.image} onChange={f('image')} className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring">
+                    <option value="/hero-mithai.jpg">Mithai (default)</option>
+                    <option value="/ladoo-plate.jpg">Ladoo plate</option>
+                    <option value="/namkeen-bowl.jpg">Namkeen bowl</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Description</label>
+                <textarea rows={3} value={form.description} onChange={f('description')} placeholder="Short product description…" className="w-full resize-none rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+              </div>
+              <div>
+                <label className="mb-2 block text-xs font-bold uppercase tracking-wider">Variants (weight · price)</label>
+                <div className="space-y-2">
+                  {([['v1w', 'v1p'], ['v2w', 'v2p'], ['v3w', 'v3p']] as const).map(([wk, pk], i) => (
+                    <div key={i} className="flex gap-2">
+                      <input value={form[wk]} onChange={f(wk)} placeholder={`e.g. ${['250 gm','500 gm','1 kg'][i]}`} className="flex-1 rounded-xl border border-input px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                      <input type="number" min="1" value={form[pk]} onChange={f(pk)} placeholder="₹ price" className="flex-1 rounded-xl border border-input px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-1.5 text-xs text-muted-foreground">Leave blank to skip a variant. At least one required.</p>
+              </div>
+              <div className="flex gap-3 pt-2 pb-1">
+                <button type="button" onClick={() => setModalOpen(false)} className="flex-1 rounded-xl border border-border py-3 text-sm font-bold">Cancel</button>
+                <button type="submit" className="flex-1 rounded-xl bg-primary py-3 text-sm font-bold text-primary-foreground">{editingId ? 'Save changes' : 'Add product'}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirm */}
+      {deleteId && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-5 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-3xl bg-background p-8 text-center shadow-2xl">
+            <div className="mx-auto grid size-14 place-items-center rounded-full bg-red-100 text-red-500"><Trash2 className="size-6" /></div>
+            <h3 className="mt-4 font-display text-2xl">Delete product?</h3>
+            <p className="mt-2 text-sm text-muted-foreground">This cannot be undone. The product disappears from the storefront immediately.</p>
+            <div className="mt-6 flex gap-3">
+              <button onClick={() => setDeleteId(null)} className="flex-1 rounded-xl border border-border py-3 text-sm font-bold">Cancel</button>
+              <button onClick={() => { onUpdate(catalog.filter(p => p.id !== deleteId)); setDeleteId(null); }} className="flex-1 rounded-xl bg-red-500 py-3 text-sm font-bold text-white">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Admin · Orders ───────────────────────────────────────────────────────────
+function AdminSectionOrders({ orders, onUpdate }: { orders: OrderRecord[]; onUpdate: (o: OrderRecord[]) => void }) {
+  const [filter, setFilter] = useState<OrderStatus | 'All'>('All');
+  const [search, setSearch] = useState('');
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  const updateStatus = (id: string, status: OrderStatus) =>
+    onUpdate(orders.map(o => o.id === id ? { ...o, status } : o));
+
+  const filtered = orders.filter(o =>
+    (filter === 'All' || o.status === filter) &&
+    (search === '' || o.id.toLowerCase().includes(search.toLowerCase()) || o.address.toLowerCase().includes(search.toLowerCase()) || o.phone.includes(search))
+  );
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2 rounded-xl border border-border bg-background px-4 py-2.5 shadow-sm">
+          <Search className="size-4 text-muted-foreground" />
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Order ID, phone, address…" className="w-48 bg-transparent text-sm outline-none" />
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {(['All', 'Confirmed', 'Packing', 'Out for delivery', 'Delivered'] as const).map(s => (
+            <button key={s} onClick={() => setFilter(s)}
+              className={`rounded-full px-3 py-1.5 text-xs font-bold transition-colors ${filter === s ? 'bg-primary text-primary-foreground' : 'border border-border bg-background hover:bg-muted'}`}>
+              {s}
+            </button>
+          ))}
+        </div>
+      </div>
+      <p className="text-xs text-muted-foreground">{filtered.length} order{filtered.length !== 1 ? 's' : ''}</p>
+
+      {filtered.length === 0 ? (
+        <div className="rounded-2xl border border-border bg-background py-16 text-center shadow-sm">
+          <ShoppingBag className="mx-auto size-8 text-muted-foreground/40" />
+          <p className="mt-4 text-sm text-muted-foreground">No orders found.</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {filtered.map(order => (
+            <div key={order.id} className="overflow-hidden rounded-2xl border border-border bg-background shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold whitespace-nowrap ${ORDER_STATUSES[order.status].color}`}>{ORDER_STATUSES[order.status].label}</span>
+                  <div>
+                    <p className="font-semibold">{order.id}</p>
+                    <p className="text-xs text-muted-foreground">{order.date} · {order.phone}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <p className="font-bold">{money(order.subtotal)}</p>
+                  <select
+                    value={order.status}
+                    onChange={e => updateStatus(order.id, e.target.value as OrderStatus)}
+                    className="rounded-xl border border-border bg-background px-3 py-1.5 text-xs font-bold outline-none focus:ring-2 focus:ring-ring"
+                    data-testid={`select-order-status-${order.id}`}
+                  >
+                    {(['Confirmed', 'Packing', 'Out for delivery', 'Delivered'] as const).map(s => <option key={s}>{s}</option>)}
+                  </select>
+                  <button onClick={() => setExpandedId(expandedId === order.id ? null : order.id)}
+                    className="grid size-8 place-items-center rounded-lg border border-border text-muted-foreground hover:bg-muted">
+                    <ChevronDown className={`size-4 transition-transform ${expandedId === order.id ? 'rotate-180' : ''}`} />
+                  </button>
+                </div>
+              </div>
+              {expandedId === order.id && (
+                <div className="border-t border-border bg-muted/30 px-5 py-4">
+                  <p className="mb-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">Delivery address</p>
+                  <p className="text-sm">{order.address}</p>
+                  <p className="mt-4 mb-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">Items</p>
+                  <div className="space-y-2">
+                    {order.items.map((line, i) => (
+                      <div key={i} className="flex items-center justify-between rounded-xl border border-border bg-background px-4 py-2.5">
+                        <div className="flex items-center gap-3">
+                          <img src={line.product.image} className="size-9 rounded-lg object-cover" alt={line.product.name} />
+                          <div>
+                            <p className="text-sm font-semibold">{line.product.name}</p>
+                            <p className="text-xs text-muted-foreground">{variantLabel(line.variant)} · qty {line.quantity}</p>
+                          </div>
+                        </div>
+                        <p className="text-sm font-bold">{money(line.variant.price * line.quantity)}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Admin · Customers ────────────────────────────────────────────────────────
+function AdminSectionCustomers({ customers }: { customers: CustomerRecord[] }) {
+  const [search, setSearch] = useState('');
+  const filtered = customers.filter(c =>
+    c.email.toLowerCase().includes(search.toLowerCase()) ||
+    (c.name ?? '').toLowerCase().includes(search.toLowerCase())
+  );
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center gap-2 rounded-xl border border-border bg-background px-4 py-2.5 shadow-sm w-fit">
+        <Search className="size-4 text-muted-foreground" />
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search customers…" className="w-52 bg-transparent text-sm outline-none" />
+      </div>
+      <div className="overflow-hidden rounded-2xl border border-border bg-background shadow-sm">
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-border bg-muted/40">
+                {['Customer', 'Email', 'Joined'].map(h => (
+                  <th key={h} className="whitespace-nowrap px-5 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-muted-foreground">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {filtered.map(c => (
+                <tr key={c.email} className="transition-colors hover:bg-muted/30">
+                  <td className="px-5 py-4">
+                    <div className="flex items-center gap-3">
+                      <div className="grid size-9 place-items-center rounded-full bg-primary text-sm font-bold text-primary-foreground">
+                        {(c.name ?? c.email)[0].toUpperCase()}
+                      </div>
+                      <p className="font-semibold">{c.name ?? '—'}</p>
+                    </div>
+                  </td>
+                  <td className="px-5 py-4 text-sm text-muted-foreground">{c.email}</td>
+                  <td className="px-5 py-4 text-sm text-muted-foreground">
+                    {c.joinedAt ? new Date(c.joinedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {filtered.length === 0 && (
+            <div className="py-14 text-center">
+              <Users className="mx-auto size-8 text-muted-foreground/40" />
+              <p className="mt-3 text-sm text-muted-foreground">No customers yet. They appear here after their first sign-in.</p>
+            </div>
+          )}
+        </div>
+      </div>
+      <p className="text-xs text-muted-foreground">{filtered.length} customer{filtered.length !== 1 ? 's' : ''}</p>
+    </div>
+  );
+}
+
+// ─── Admin · Settings ─────────────────────────────────────────────────────────
+function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
+  const [currentPw, setCurrentPw] = useState('');
+  const [newPw, setNewPw] = useState('');
+  const [confirmPw, setConfirmPw] = useState('');
+  const [showPw, setShowPw] = useState(false);
+  const [pwMsg, setPwMsg] = useState('');
+  const [storeInfo, setStoreInfo] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem('aggarwal-store-info') || 'null') ?? {}; } catch { return {}; }
+  });
+  const [storeMsg, setStoreMsg] = useState('');
+  const [dangerMsg, setDangerMsg] = useState('');
+  const defaults: Record<string, string> = { name: 'Aggarwal Sweets', address: '12, Hissar Road, Sirsa', phone: '01666234786', hours: '9:00 AM – 9:30 PM' };
+  const si = { ...defaults, ...storeInfo };
+
+  const handleChangePw = (e: React.FormEvent) => {
+    e.preventDefault(); setPwMsg('');
+    if (currentPw !== readAdminPassword()) { setPwMsg('error:Current password is incorrect.'); return; }
+    if (newPw.length < 6) { setPwMsg('error:New password must be at least 6 characters.'); return; }
+    if (newPw !== confirmPw) { setPwMsg('error:Passwords do not match.'); return; }
+    localStorage.setItem('aggarwal-admin-password', newPw);
+    setPwMsg('ok:Password updated!');
+    setCurrentPw(''); setNewPw(''); setConfirmPw('');
+  };
+
+  const saveStoreInfo = (e: React.FormEvent) => {
+    e.preventDefault();
+    localStorage.setItem('aggarwal-store-info', JSON.stringify(si));
+    setStoreMsg('ok:Store info saved!');
+    setTimeout(() => setStoreMsg(''), 3000);
+  };
+
+  const msgCls = (msg: string) => msg.startsWith('ok:') ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700';
+  const msgTxt = (msg: string) => msg.replace(/^(ok|error):/, '');
+
+  return (
+    <div className="max-w-2xl space-y-6">
+      {/* Profile card */}
+      <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+        <h3 className="font-semibold">Admin account</h3>
+        <div className="mt-4 flex items-center gap-4">
+          <div className="grid size-14 place-items-center rounded-full bg-primary text-xl font-bold text-primary-foreground">A</div>
+          <div>
+            <p className="font-semibold">{adminUser.name ?? 'Admin'}</p>
+            <p className="text-sm text-muted-foreground">{adminUser.email}</p>
+            <span className="mt-1 inline-block rounded-full bg-accent px-2 py-0.5 text-[10px] font-bold text-accent-foreground">Owner / Admin</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Change password */}
+      <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+        <h3 className="font-semibold">Change password</h3>
+        <p className="mt-1 text-sm text-muted-foreground">Default: <code className="rounded bg-muted px-1.5 py-0.5 text-xs">Admin@123</code></p>
+        <form onSubmit={handleChangePw} className="mt-4 space-y-3">
+          {([
+            { label: 'Current password', val: currentPw, set: setCurrentPw, eye: true },
+            { label: 'New password',     val: newPw,     set: setNewPw,     eye: false },
+            { label: 'Confirm new password', val: confirmPw, set: setConfirmPw, eye: false },
+          ]).map(({ label, val, set, eye }) => (
+            <div key={label}>
+              <label className="mb-1 block text-xs font-bold uppercase tracking-wider">{label}</label>
+              <div className="relative">
+                <input type={showPw ? 'text' : 'password'} required value={val} onChange={e => set(e.target.value)} placeholder="••••••••"
+                  className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+                {eye && (
+                  <button type="button" onClick={() => setShowPw(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground">
+                    {showPw ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+          {pwMsg && <p className={`rounded-xl px-4 py-2 text-xs font-bold ${msgCls(pwMsg)}`}>{msgTxt(pwMsg)}</p>}
+          <button type="submit" className="rounded-xl bg-primary px-5 py-2.5 text-sm font-bold text-primary-foreground">Update password</button>
+        </form>
+      </div>
+
+      {/* Store info */}
+      <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+        <h3 className="font-semibold">Store information</h3>
+        <form onSubmit={saveStoreInfo} className="mt-4 space-y-3">
+          {[
+            { key: 'name',    label: 'Store name' },
+            { key: 'address', label: 'Address' },
+            { key: 'phone',   label: 'Phone number' },
+            { key: 'hours',   label: 'Opening hours' },
+          ].map(({ key, label }) => (
+            <div key={key}>
+              <label className="mb-1 block text-xs font-bold uppercase tracking-wider">{label}</label>
+              <input value={si[key] ?? ''} onChange={e => setStoreInfo(s => ({ ...s, [key]: e.target.value }))}
+                className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
+            </div>
+          ))}
+          {storeMsg && <p className={`rounded-xl px-4 py-2 text-xs font-bold ${msgCls(storeMsg)}`}>{msgTxt(storeMsg)}</p>}
+          <button type="submit" className="rounded-xl bg-primary px-5 py-2.5 text-sm font-bold text-primary-foreground">Save info</button>
+        </form>
+      </div>
+
+      {/* Danger zone */}
+      <div className="rounded-2xl border border-red-200 bg-background p-6 shadow-sm">
+        <h3 className="font-semibold text-red-600">Danger zone</h3>
+        <p className="mt-1 text-sm text-muted-foreground">These actions cannot be undone.</p>
+        <div className="mt-4 space-y-3">
+          {[
+            { label: 'Clear all orders', desc: 'Removes all order records', action: () => { localStorage.removeItem('aggarwal-orders'); setDangerMsg('ok:Orders cleared.'); } },
+            { label: 'Clear customer list', desc: 'Removes all registered customers', action: () => { localStorage.removeItem('aggarwal-customers'); setDangerMsg('ok:Customers cleared.'); } },
+            { label: 'Reset product catalogue', desc: 'Restores the original product list', action: () => { localStorage.removeItem('aggarwal-catalog'); window.dispatchEvent(new Event('aggarwal-catalog-updated')); setDangerMsg('ok:Catalogue reset to defaults.'); } },
+          ].map(({ label, desc, action }) => (
+            <div key={label} className="flex items-center justify-between rounded-xl border border-border p-4">
+              <div>
+                <p className="text-sm font-semibold">{label}</p>
+                <p className="text-xs text-muted-foreground">{desc}</p>
+              </div>
+              <button onClick={action} className="rounded-xl border border-red-200 px-4 py-2 text-xs font-bold text-red-500 hover:bg-red-50">
+                Clear
+              </button>
+            </div>
+          ))}
+          {dangerMsg && <p className={`rounded-xl px-4 py-2 text-xs font-bold ${msgCls(dangerMsg)}`}>{msgTxt(dangerMsg)}</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Admin Page (auth gate) ───────────────────────────────────────────────────
+function AdminPage() {
+  const [user, setUser] = useState<AuthUser | null>(readUser);
+  const isAdmin = user?.role === 'admin';
+
+  const handleLogout = () => { localStorage.removeItem('aggarwal-user'); setUser(null); };
+
+  if (!isAdmin) return <AdminLoginScreen onLogin={setUser} />;
+  return <AdminDashboard adminUser={user!} onLogout={handleLogout} />;
 }
 
 // ─── Floating Contact Buttons ─────────────────────────────────────────────────
@@ -1986,6 +2728,7 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
 
   const handleLogin = (u: AuthUser) => {
     setUser(u);
+    if (u.role !== 'admin') trackCustomer(u);
     if (pendingCheckout) {
       setPendingCheckout(false);
       setAuthOpen(false);
