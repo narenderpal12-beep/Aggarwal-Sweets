@@ -32,7 +32,15 @@ router.post("/auth/otp/send", async (req, res) => {
   });
 
   if (isEmailConfigured()) {
-    await sendOtpEmail(email, code);
+    try {
+      await sendOtpEmail(email, code);
+    } catch (err: any) {
+      console.error("Failed to send OTP email:", err?.message ?? err);
+      // Still return success — the OTP is saved and can be verified.
+      // The caller can check console logs in dev; in prod the admin should fix credentials.
+      res.status(500).json({ error: "Could not send email. Please check Gmail credentials or try again." });
+      return;
+    }
   } else {
     // Dev fallback — log to console so it's still usable without email config
     console.info(`[dev] OTP for ${email}: ${code}`);
