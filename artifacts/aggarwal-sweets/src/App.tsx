@@ -94,7 +94,7 @@ const allSubItems: NavSubItem[] = navCategories.flatMap(c => c.subs);
 const products: Product[] = [
   {
     id: 'kaju-katli', name: 'Kaju Katli', category: 'Mithai', price: 340, unit: '250 gm',
-    rating: 4.9, reviews: 126, badge: 'Best seller', image: '/hero-mithai.jpg',
+    rating: 4.9, reviews: 126, badge: 'Best seller', image: '/product-kaju-katli.jpg',
     description: 'Silky cashew fudge finished with a whisper of silver leaf. Made in small batches for the perfect melt.',
     tags: ['kaju-sweets', 'barfi-halwa', 'festive-specials'],
     variants: [
@@ -105,7 +105,7 @@ const products: Product[] = [
   },
   {
     id: 'motichoor-ladoo', name: 'Motichoor Ladoo', category: 'Mithai', price: 220, unit: '250 gm',
-    rating: 4.8, reviews: 89, badge: 'Festive favourite', image: '/ladoo-plate.jpg',
+    rating: 4.8, reviews: 89, badge: 'Festive favourite', image: '/product-motichoor-ladoo.jpg',
     description: 'Tiny saffron-hued boondi pearls, slow-cooked and hand-rolled with melon seeds.',
     tags: ['ladoo-laddus', 'festive-specials'],
     variants: [
@@ -116,7 +116,7 @@ const products: Product[] = [
   },
   {
     id: 'pista-barfi', name: 'Pista Barfi', category: 'Mithai', price: 280, unit: '250 gm',
-    rating: 4.7, reviews: 54, image: '/hero-mithai.jpg',
+    rating: 4.7, reviews: 54, image: '/product-pista-barfi.jpg',
     description: 'Pistachio, khoya and cardamom layered into a delicate, nutty barfi.',
     tags: ['barfi-halwa', 'milk-sweets'],
     variants: [
@@ -127,7 +127,7 @@ const products: Product[] = [
   },
   {
     id: 'desi-ghee-jalebi', name: 'Desi Ghee Jalebi', category: 'Mithai', price: 150, unit: '250 gm',
-    rating: 4.9, reviews: 72, badge: 'Made today', image: '/ladoo-plate.jpg',
+    rating: 4.9, reviews: 72, badge: 'Made today', image: '/product-jalebi.jpg',
     description: 'Crisp spirals soaked in warm saffron syrup. Best enjoyed the same day.',
     tags: ['ghee-sweets', 'festive-specials'],
     variants: [
@@ -137,7 +137,7 @@ const products: Product[] = [
   },
   {
     id: 'aloo-bhujia', name: 'Aloo Bhujia', category: 'Namkeen', price: 95, unit: '200 gm',
-    rating: 4.8, reviews: 108, badge: 'Tea-time hero', image: '/namkeen-bowl.jpg',
+    rating: 4.8, reviews: 108, badge: 'Tea-time hero', image: '/product-aloo-bhujia.jpg',
     description: 'Crunchy potato sev with a bright, savoury masala blend — impossible to stop at one handful.',
     tags: ['bhujia-sev'],
     variants: [
@@ -148,7 +148,7 @@ const products: Product[] = [
   },
   {
     id: 'masala-kaju', name: 'Masala Kaju', category: 'Namkeen', price: 190, unit: '150 gm',
-    rating: 4.7, reviews: 43, image: '/namkeen-bowl.jpg',
+    rating: 4.7, reviews: 43, image: '/product-masala-kaju.jpg',
     description: 'Roasted cashews tossed in our house chilli, pepper and amchur seasoning.',
     tags: ['roasted-nuts'],
     variants: [
@@ -159,7 +159,7 @@ const products: Product[] = [
   },
   {
     id: 'mathri', name: 'Ajwain Mathri', category: 'Snacks', price: 120, unit: '250 gm',
-    rating: 4.6, reviews: 38, image: '/namkeen-bowl.jpg',
+    rating: 4.6, reviews: 38, image: '/product-mathri.jpg',
     description: 'Flaky, savoury and gently spiced with ajwain. A Sirsa afternoon ritual.',
     tags: ['mathri-crackers', 'tea-time-snacks', 'spiced-snacks'],
     variants: [
@@ -170,7 +170,7 @@ const products: Product[] = [
   },
   {
     id: 'shagun-box', name: 'Shagun Box · Golden Edit', category: 'Gifting', price: 690, unit: '750 gm',
-    rating: 4.9, reviews: 31, badge: 'Gift ready', image: '/hero-mithai.jpg',
+    rating: 4.9, reviews: 31, badge: 'Gift ready', image: '/product-shagun-box.jpg',
     description: 'A celebration-ready assortment of kaju katli, ladoo, pista barfi and premium namkeen.',
     tags: ['festival-boxes', 'corporate-gifts', 'personal-gifts'],
     variants: [
