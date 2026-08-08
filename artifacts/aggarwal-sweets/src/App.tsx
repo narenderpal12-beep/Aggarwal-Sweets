@@ -21,7 +21,7 @@ type ProductVariant = { material: string; weight: string; price: number };
 type Product = {
   id: string; name: string; category: Exclude<Category, 'All'>; price: number; unit: string;
   rating: number; reviews: number; description: string; image: string; badge?: string;
-  variants: ProductVariant[];
+  variants: ProductVariant[]; tags?: string[];
 };
 type CartLine = { product: Product; variant: ProductVariant; quantity: number };
 type AuthUser = { email: string; name?: string };
@@ -30,47 +30,55 @@ type OrderRecord = {
   id: string; date: string; items: CartLine[]; subtotal: number;
   status: OrderStatus; address: string; phone: string;
 };
+type BlogPost = {
+  id: string; slug: string; title: string; excerpt: string;
+  date: string; readTime: string; category: string; image: string;
+  body: string[];
+};
 
 // ─── Nav structure ────────────────────────────────────────────────────────────
-type NavSubItem = { label: string; category: Exclude<Category, 'All'> };
+type NavSubItem = { label: string; slug: string; subtitle: string; category: Exclude<Category, 'All'> };
 type NavCategory = { label: string; subs: NavSubItem[] };
 
 const navCategories: NavCategory[] = [
   {
     label: 'Mithai',
     subs: [
-      { label: 'Kaju Sweets', category: 'Mithai' },
-      { label: 'Ghee Sweets', category: 'Mithai' },
-      { label: 'Milk Sweets', category: 'Mithai' },
-      { label: 'Ladoo & Laddus', category: 'Mithai' },
-      { label: 'Barfi & Halwa', category: 'Mithai' },
-      { label: 'Festive Specials', category: 'Mithai' },
+      { label: 'Kaju Sweets',     slug: 'kaju-sweets',     subtitle: 'Our finest cashew delicacies',           category: 'Mithai' },
+      { label: 'Ghee Sweets',     slug: 'ghee-sweets',     subtitle: 'Pure desi ghee, traditional recipes',    category: 'Mithai' },
+      { label: 'Milk Sweets',     slug: 'milk-sweets',     subtitle: 'Khoya, milk and cream-based mithai',     category: 'Mithai' },
+      { label: 'Ladoo & Laddus', slug: 'ladoo-laddus',    subtitle: 'Hand-rolled and auspicious',             category: 'Mithai' },
+      { label: 'Barfi & Halwa',  slug: 'barfi-halwa',     subtitle: 'Firm, fudgy and festival-ready',         category: 'Mithai' },
+      { label: 'Festive Specials',slug: 'festive-specials',subtitle: 'Made for the big occasions',             category: 'Mithai' },
     ],
   },
   {
     label: 'Namkeen',
     subs: [
-      { label: 'Bhujia & Sev', category: 'Namkeen' },
-      { label: 'Roasted Nuts', category: 'Namkeen' },
-      { label: 'Mathri & Crackers', category: 'Namkeen' },
+      { label: 'Bhujia & Sev',      slug: 'bhujia-sev',      subtitle: 'The best of the savoury counter',      category: 'Namkeen' },
+      { label: 'Roasted Nuts',      slug: 'roasted-nuts',    subtitle: 'Spiced, crunchy, hand-roasted',        category: 'Namkeen' },
+      { label: 'Mathri & Crackers', slug: 'mathri-crackers', subtitle: 'Flaky bites for every chai break',     category: 'Namkeen' },
     ],
   },
   {
     label: 'Snacks',
     subs: [
-      { label: 'Tea-time Snacks', category: 'Snacks' },
-      { label: 'Spiced Snacks', category: 'Snacks' },
+      { label: 'Tea-time Snacks', slug: 'tea-time-snacks', subtitle: 'Perfect companions for chai',          category: 'Snacks' },
+      { label: 'Spiced Snacks',   slug: 'spiced-snacks',   subtitle: 'A little heat, a lot of flavour',      category: 'Snacks' },
     ],
   },
   {
     label: 'Gifting',
     subs: [
-      { label: 'Festival Boxes', category: 'Gifting' },
-      { label: 'Corporate Gifts', category: 'Gifting' },
-      { label: 'Personal Gifts', category: 'Gifting' },
+      { label: 'Festival Boxes',  slug: 'festival-boxes',  subtitle: 'Boxes built for celebrations',         category: 'Gifting' },
+      { label: 'Corporate Gifts', slug: 'corporate-gifts', subtitle: 'Thoughtful, premium and branded',      category: 'Gifting' },
+      { label: 'Personal Gifts',  slug: 'personal-gifts',  subtitle: 'From one heart to another',            category: 'Gifting' },
     ],
   },
 ];
+
+// Flat lookup: slug → sub-item
+const allSubItems: NavSubItem[] = navCategories.flatMap(c => c.subs);
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 const products: Product[] = [
@@ -78,6 +86,7 @@ const products: Product[] = [
     id: 'kaju-katli', name: 'Kaju Katli', category: 'Mithai', price: 340, unit: '250 gm',
     rating: 4.9, reviews: 126, badge: 'Best seller', image: '/hero-mithai.jpg',
     description: 'Silky cashew fudge finished with a whisper of silver leaf. Made in small batches for the perfect melt.',
+    tags: ['kaju-sweets', 'barfi-halwa', 'festive-specials'],
     variants: [
       { material: 'Pure desi ghee', weight: '250 gm', price: 340 },
       { material: 'Pure desi ghee', weight: '500 gm', price: 680 },
@@ -88,6 +97,7 @@ const products: Product[] = [
     id: 'motichoor-ladoo', name: 'Motichoor Ladoo', category: 'Mithai', price: 220, unit: '250 gm',
     rating: 4.8, reviews: 89, badge: 'Festive favourite', image: '/ladoo-plate.jpg',
     description: 'Tiny saffron-hued boondi pearls, slow-cooked and hand-rolled with melon seeds.',
+    tags: ['ladoo-laddus', 'festive-specials'],
     variants: [
       { material: 'Desi ghee', weight: '250 gm', price: 220 },
       { material: 'Desi ghee', weight: '500 gm', price: 420 },
@@ -98,6 +108,7 @@ const products: Product[] = [
     id: 'pista-barfi', name: 'Pista Barfi', category: 'Mithai', price: 280, unit: '250 gm',
     rating: 4.7, reviews: 54, image: '/hero-mithai.jpg',
     description: 'Pistachio, khoya and cardamom layered into a delicate, nutty barfi.',
+    tags: ['barfi-halwa', 'milk-sweets'],
     variants: [
       { material: 'Pure desi ghee', weight: '250 gm', price: 280 },
       { material: 'Pure desi ghee', weight: '500 gm', price: 560 },
@@ -108,6 +119,7 @@ const products: Product[] = [
     id: 'desi-ghee-jalebi', name: 'Desi Ghee Jalebi', category: 'Mithai', price: 150, unit: '250 gm',
     rating: 4.9, reviews: 72, badge: 'Made today', image: '/ladoo-plate.jpg',
     description: 'Crisp spirals soaked in warm saffron syrup. Best enjoyed the same day.',
+    tags: ['ghee-sweets', 'festive-specials'],
     variants: [
       { material: 'Desi ghee', weight: '250 gm', price: 150 },
       { material: 'Desi ghee', weight: '500 gm', price: 290 },
@@ -117,6 +129,7 @@ const products: Product[] = [
     id: 'aloo-bhujia', name: 'Aloo Bhujia', category: 'Namkeen', price: 95, unit: '200 gm',
     rating: 4.8, reviews: 108, badge: 'Tea-time hero', image: '/namkeen-bowl.jpg',
     description: 'Crunchy potato sev with a bright, savoury masala blend — impossible to stop at one handful.',
+    tags: ['bhujia-sev'],
     variants: [
       { material: 'Groundnut oil', weight: '200 gm', price: 95 },
       { material: 'Groundnut oil', weight: '400 gm', price: 180 },
@@ -127,6 +140,7 @@ const products: Product[] = [
     id: 'masala-kaju', name: 'Masala Kaju', category: 'Namkeen', price: 190, unit: '150 gm',
     rating: 4.7, reviews: 43, image: '/namkeen-bowl.jpg',
     description: 'Roasted cashews tossed in our house chilli, pepper and amchur seasoning.',
+    tags: ['roasted-nuts'],
     variants: [
       { material: 'Roasted & spiced', weight: '150 gm', price: 190 },
       { material: 'Roasted & spiced', weight: '250 gm', price: 360 },
@@ -137,6 +151,7 @@ const products: Product[] = [
     id: 'mathri', name: 'Ajwain Mathri', category: 'Snacks', price: 120, unit: '250 gm',
     rating: 4.6, reviews: 38, image: '/namkeen-bowl.jpg',
     description: 'Flaky, savoury and gently spiced with ajwain. A Sirsa afternoon ritual.',
+    tags: ['mathri-crackers', 'tea-time-snacks', 'spiced-snacks'],
     variants: [
       { material: 'Traditional', weight: '250 gm', price: 120 },
       { material: 'Traditional', weight: '500 gm', price: 220 },
@@ -147,6 +162,7 @@ const products: Product[] = [
     id: 'shagun-box', name: 'Shagun Box · Golden Edit', category: 'Gifting', price: 690, unit: '750 gm',
     rating: 4.9, reviews: 31, badge: 'Gift ready', image: '/hero-mithai.jpg',
     description: 'A celebration-ready assortment of kaju katli, ladoo, pista barfi and premium namkeen.',
+    tags: ['festival-boxes', 'corporate-gifts', 'personal-gifts'],
     variants: [
       { material: 'Classic assortment', weight: '750 gm', price: 690 },
       { material: 'Classic assortment', weight: '1.25 kg', price: 1290 },
@@ -162,35 +178,88 @@ const categories: { label: Exclude<Category, 'All'>; note: string; icon: typeof 
   { label: 'Gifting', note: 'Send a little celebration', icon: Gift, image: '/hero-mithai.jpg' },
 ];
 
+
 // ─── Blog posts (static) ──────────────────────────────────────────────────────
-const blogPosts = [
+const blogPosts: BlogPost[] = [
   {
     id: 'history-of-kaju-katli', slug: 'history-of-kaju-katli',
     title: "The Silver Story: How Kaju Katli Became India's Favourite Mithai",
     excerpt: "From royal kitchens to neighbourhood sweet shops — tracing the journey of the most gifted sweet in India.",
-    date: 'July 2025', readTime: '4 min', category: 'Heritage',
-    image: '/hero-mithai.jpg',
+    date: 'July 2025', readTime: '4 min', category: 'Heritage', image: '/hero-mithai.jpg',
+    body: [
+      "Kaju Katli is not just a sweet — it is a cultural shorthand for celebration. The thin diamond-shaped slice of cashew fudge, wrapped in a whisper of edible silver, arrives at weddings, festivals, promotions, and first visits. Yet very few people pause to ask: where did it come from?",
+      "The origins are traced to the royal kitchens of Rajasthan and parts of present-day Uttar Pradesh, where halwais serving Mughal-era courts experimented with imported cashews (kaju) and fine sugar syrup. The one-string consistency of the sugar — cooked until a single thread forms between thumb and forefinger — became the defining test of a skilled mithai maker.",
+      "What sets kaju katli apart from other barfi is the absence of milk or ghee in the base. The cashew paste itself provides the fat, giving it that distinctly clean, almost buttery melt. The silver vark on top was originally functional — a preservative — before it became purely ceremonial.",
+      "At Aggarwal Sweets, we have been making kaju katli the same way since 1978: raw cashews soaked overnight, ground fresh each morning, and cooked in open brass kadais over a slow flame. The silver is applied by hand, one sheet at a time. No machine can replicate the even pressure required. It is tedious work, and we would not have it any other way.",
+      "The next time someone hands you a box of kaju katli at a wedding, take a moment before you eat it. You are holding several centuries of culinary refinement in one diamond-shaped bite.",
+    ],
   },
   {
     id: 'ghee-vs-oil', slug: 'ghee-vs-oil',
     title: 'Desi Ghee vs Oil in Sweets: What Actually Changes the Flavour?',
     excerpt: "Our head mithai maker breaks down why ghee isn't just a tradition — it's the reason the barfi melts just right.",
-    date: 'June 2025', readTime: '3 min', category: 'Craft',
-    image: '/ladoo-plate.jpg',
+    date: 'June 2025', readTime: '3 min', category: 'Craft', image: '/ladoo-plate.jpg',
+    body: [
+      "We get asked this question at least once a week: 'Do you use real ghee, or is it oil?' The honest answer is: always pure desi ghee — and here is why it matters far more than most people realise.",
+      "Ghee has a higher smoke point than most cooking oils, which means it can carry the heat required to properly roast besan or suji without burning. But the real difference is flavour. Ghee contains diacetyl and short-chain fatty acids that create the warm, nutty, unmistakably 'mithai' aroma. Oil simply cannot replicate this chemistry.",
+      "When you eat a besan ladoo made with ghee, it dissolves slowly and evenly on the tongue. The same ladoo made with oil feels greasy and exits quickly — there is no lingering, no finish. In food science terms, ghee acts as a flavour carrier, binding fat-soluble aromatic compounds and releasing them gradually as the sweet melts.",
+      "There is also texture. Ghee-based barfi sets firmer at room temperature and softens precisely when it hits body heat. That controlled melt is not an accident — it is the fat crystallisation behaviour of clarified butter, something refined oils cannot match.",
+      "Switching to oil would shave about 15% off our raw material cost. We tried it once, in 2003, on a single batch of motichoor ladoo. Nobody complained because they did not know. But we knew. The batch went in the family kitchen. We never tried again.",
+    ],
   },
   {
     id: 'festive-gifting-guide', slug: 'festive-gifting-guide',
     title: '2025 Festive Gifting Guide: What to Send, How Much, and When',
     excerpt: 'A practical guide from the Aggarwal family — how to pick a box that says exactly the right thing.',
-    date: 'May 2025', readTime: '5 min', category: 'Guide',
-    image: '/hero-mithai.jpg',
+    date: 'May 2025', readTime: '5 min', category: 'Guide', image: '/hero-mithai.jpg',
+    body: [
+      "Gifting sweets sounds straightforward until you are standing in front of a counter with seventeen varieties and a cousin's wedding in three hours. Over forty-seven years of selling mithai in Sirsa, we have noticed that most gifting mistakes fall into three categories: too little, too safe, or too late.",
+      "Too little means sending a 250g box for an occasion that warrants 500g or more. As a general rule: casual visits → 250–500g. Wedding functions → 1kg+. Corporate gifting → standardised boxes of 500g per recipient. Diwali hampers → combine sweets with namkeen for variety at any weight.",
+      "Too safe means sending kaju katli when you could send something that actually reflects the occasion. For a new baby, motichoor ladoo — round, golden, auspicious. For a business deal closed, a premium dry fruit box communicates more than a standard assortment. For a Punjabi household's Lohri, gajak and rewri belong alongside the mithai.",
+      "Too late is the silent killer of sweet gifting. Mithai made fresh lasts 3–7 days without refrigeration depending on the variety. Order at least 48 hours in advance for anything above 2kg. For large weddings, we recommend a 7-day lead time so we can pack in batches and ensure each box is equally fresh.",
+      "One final note: the box matters. A plain cardboard box says function. A foil-lined decorative box with a hand-tied ribbon says occasion. We offer both — ask our counter staff which box suits your event and we will pack it right.",
+    ],
   },
   {
     id: 'tea-time-namkeen', slug: 'tea-time-namkeen',
     title: 'Five Namkeens That Belong Next to Your Evening Chai',
     excerpt: 'From bhujia to mathri, we rank the snacks that have earned a permanent spot on the tea tray.',
-    date: 'April 2025', readTime: '3 min', category: 'Food',
-    image: '/namkeen-bowl.jpg',
+    date: 'April 2025', readTime: '3 min', category: 'Food', image: '/namkeen-bowl.jpg',
+    body: [
+      "Evening chai is non-negotiable in most North Indian homes. What sits next to it is a matter of fierce personal conviction. We have sold namkeen in Sirsa since before most of our customers were born, and after much internal debate, here is our definitive tea-time ranking.",
+      "1. Aloo Bhujia. The undisputed king. The thin, spiced potato-and-besan strands are engineered for chai — crunchy without being loud, salty without being aggressive. Bikaner claims to have invented it; we just do it well.",
+      "2. Mathri. Flaky, ghee-rich, and sturdy enough to scoop pickle if the mood strikes. The short pastry texture makes it the most satisfying bite on this list. Best eaten the day it is made.",
+      "3. Moong Dal. Light and addictive in a way that is difficult to explain until you have eaten a handful. The slow-fried split green gram has a clean protein flavour that holds up against masala chai without competing.",
+      "4. Mixture. A democratic option — a little of everything. Not the most refined choice, but the most crowd-pleasing. Ideal for large gatherings where you cannot predict anyone's preference.",
+      "5. Chakli. The South Indian ringed spiral has earned a permanent place on North Indian tea trays. Sesame, ajwain, and rice flour in a crunch that is deeply satisfying.",
+    ],
+  },
+  {
+    id: 'motichoor-ladoo-story', slug: 'motichoor-ladoo-story',
+    title: 'Motichoor Ladoo: The Sweet That Crosses Every Occasion',
+    excerpt: 'Why this small, grainy orange ball shows up at births, weddings, and temple offerings alike — and how it is made.',
+    date: 'March 2025', readTime: '4 min', category: 'Heritage', image: '/ladoo-plate.jpg',
+    body: [
+      "Ask any North Indian family to name one sweet that has been present at every major moment of their lives, and the answer is almost always motichoor ladoo. Not kaju katli (too expensive for daily rituals), not gulab jamun (too messy to travel), but the humble, grainy, saffron-orange ladoo — reliable, auspicious, and universally loved.",
+      "The name comes from the tiny boondi pearls it is made from: moti (pearl) + choor (crumbled/crushed). The boondi are fried in ghee, soaked in sugar syrup spiced with cardamom and a few strands of saffron, then pressed together while still warm into balls. The technique sounds simple. The execution is demanding.",
+      "The syrup must be at precisely the right consistency — not so thin that the boondi stay separate, not so thick that the ladoo becomes hard. The pressing must happen quickly, while the mixture is warm enough to bind but not so hot it burns the hands. An experienced ladoo maker does this entirely by feel, producing dozens of identical spheres in minutes.",
+      "At temples across Haryana and Rajasthan, motichoor ladoo is the prasad of choice — perhaps because its roundness echoes the chakra, or perhaps simply because it is delicious and travels well without refrigeration.",
+      "We make our motichoor in the traditional orange, but also in a pale cream variety (sans saffron) for families who prefer a more subtle colour for certain pujas. Both use the same syrup ratio, the same ghee, the same unhurried press. Some things should not be rushed.",
+    ],
+  },
+  {
+    id: 'store-mithai-at-home', slug: 'store-mithai-at-home',
+    title: 'How to Store Mithai at Home Without Losing Freshness',
+    excerpt: 'The five most common mistakes people make after bringing home a box of sweets — and how to avoid every one of them.',
+    date: 'February 2025', readTime: '3 min', category: 'Tips', image: '/hero-mithai.jpg',
+    body: [
+      "You have bought a beautiful box of sweets. The counter was fragrant, the packaging pristine, the drive home made you seriously consider eating one in the car. Then, three days later, the barfi has dried out, the ladoos have cracked, and something in the corner smells faintly of the fridge. Here is where it went wrong.",
+      "Mistake 1: Refrigerating everything. The refrigerator is not the default home for mithai. Cold, dry refrigerator air draws out moisture and hardens the texture. Kaju katli, besan ladoo, and barfi are best stored at room temperature in an airtight container for up to 5 days. Only milk-based sweets like rasgulla or rabri need refrigeration.",
+      "Mistake 2: Keeping sweets in the original packaging. Decorative boxes are not airtight. Transfer sweets to a steel or glass container with a tight lid within a few hours of purchase, especially in summer.",
+      "Mistake 3: Mixing wet and dry sweets. Rasgulla next to mathri is a recipe for soggy namkeen. Store wet and dry items in completely separate containers.",
+      "Mistake 4: Leaving them in sunlight or near the stove. Heat and light accelerate oxidation of the ghee. A cool, dark kitchen cabinet is ideal.",
+      "Mistake 5: Waiting too long. The best storage advice we can give is: eat mithai fresh. Share it with the neighbourhood, send some to a relative, offer it at the temple. Mithai made with care is meant to be given and eaten — not hoarded.",
+    ],
   },
 ];
 
@@ -356,7 +425,7 @@ function AuthModal({ onClose, onLogin }: { onClose: () => void; onLogin: (user: 
 }
 
 // ─── Dropdown Nav ─────────────────────────────────────────────────────────────
-function ShopDropdown({ onNavigate }: { onNavigate: (cat: Exclude<Category, 'All'>) => void }) {
+function ShopDropdown({ onNavigate }: { onNavigate: (cat: Exclude<Category, 'All'>, slug?: string) => void }) {
   const [hoveredCat, setHoveredCat] = useState<NavCategory>(navCategories[0]);
 
   return (
@@ -385,7 +454,7 @@ function ShopDropdown({ onNavigate }: { onNavigate: (cat: Exclude<Category, 'All
         {hoveredCat.subs.map(sub => (
           <button
             key={sub.label}
-            onClick={() => onNavigate(sub.category)}
+            onClick={() => onNavigate(sub.category, sub.slug)}
             className="flex w-full items-center px-5 py-3 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             data-testid={`nav-sub-${sub.label.toLowerCase().replace(/\s+/g, '-')}`}
           >
@@ -425,10 +494,10 @@ function Header({
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  const handleNavCategory = (cat: Exclude<Category, 'All'>) => {
+  const handleNavCategory = (cat: Exclude<Category, 'All'>, slug?: string) => {
     setShopOpen(false);
     setMenuOpen(false);
-    navigate(`/shop/${cat.toLowerCase()}`);
+    navigate(`/shop/${cat.toLowerCase()}${slug ? `?sub=${slug}` : ''}`);
   };
 
   return (
@@ -475,12 +544,12 @@ function Header({
           <Link href="/blog" className="rounded-lg px-4 py-2.5 transition-colors hover:bg-muted" data-testid="nav-blog" onClick={() => setShopOpen(false)}>
             Blog
           </Link>
-          <a href={`${import.meta.env.BASE_URL}#story`} className="rounded-lg px-4 py-2.5 transition-colors hover:bg-muted" data-testid="nav-story" onClick={() => setShopOpen(false)}>
+          <Link href="/our-story" className="rounded-lg px-4 py-2.5 transition-colors hover:bg-muted" data-testid="nav-story" onClick={() => setShopOpen(false)}>
             Our Story
-          </a>
-          <a href={`${import.meta.env.BASE_URL}#visit`} className="rounded-lg px-4 py-2.5 transition-colors hover:bg-muted" data-testid="nav-contact" onClick={() => setShopOpen(false)}>
+          </Link>
+          <Link href="/contact" className="rounded-lg px-4 py-2.5 transition-colors hover:bg-muted" data-testid="nav-contact" onClick={() => setShopOpen(false)}>
             Contact
-          </a>
+          </Link>
         </nav>
 
         {/* Mobile nav */}
@@ -501,7 +570,7 @@ function Header({
                       {cat.subs.map(sub => (
                         <button
                           key={sub.label}
-                          onClick={() => { handleNavCategory(sub.category); setMobileShopOpen(false); }}
+                          onClick={() => { handleNavCategory(sub.category, sub.slug); setMobileShopOpen(false); setMenuOpen(false); }}
                           className="block w-full py-1.5 text-left text-sm text-muted-foreground hover:text-foreground"
                         >
                           {sub.label}
@@ -513,8 +582,8 @@ function Header({
               )}
               <Link href="/shop/gifting" className="block py-2.5 text-sm font-semibold" onClick={() => setMenuOpen(false)}>Gifting</Link>
               <Link href="/blog" className="block py-2.5 text-sm font-semibold" onClick={() => setMenuOpen(false)}>Blog</Link>
-              <a href={`${import.meta.env.BASE_URL}#story`} className="block py-2.5 text-sm font-semibold" onClick={() => setMenuOpen(false)}>Our Story</a>
-              <a href={`${import.meta.env.BASE_URL}#visit`} className="block py-2.5 text-sm font-semibold" onClick={() => setMenuOpen(false)}>Contact</a>
+              <Link href="/our-story" className="block py-2.5 text-sm font-semibold" onClick={() => setMenuOpen(false)}>Our Story</Link>
+              <Link href="/contact" className="block py-2.5 text-sm font-semibold" onClick={() => setMenuOpen(false)}>Contact</Link>
             </div>
           </div>
         )}
@@ -1018,36 +1087,49 @@ function ShopPage({
     : 'All';
 
   const [category, setCategory] = useState<Category>(initialCategory);
+  const [subSlug, setSubSlug] = useState(() => new URLSearchParams(window.location.search).get('sub') ?? '');
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState('featured');
 
-  // Sync when URL param changes
+  // Sync when URL params change
   useEffect(() => {
     const cat = rawCat
       ? ((rawCat.charAt(0).toUpperCase() + rawCat.slice(1)) as Category)
       : 'All';
     setCategory(cat);
-  }, [rawCat]);
+    setSubSlug(new URLSearchParams(window.location.search).get('sub') ?? '');
+    setQuery('');
+  }, [rawCat, window.location.search]);
+
+  const activeSubItem = subSlug ? allSubItems.find(s => s.slug === subSlug) : null;
 
   const filtered = useMemo(() =>
     catalog
-      .filter(p => (category === 'All' || p.category === category) && p.name.toLowerCase().includes(query.toLowerCase()))
+      .filter(p => {
+        const catMatch = category === 'All' || p.category === category;
+        const subMatch = !subSlug || (p.tags ?? []).includes(subSlug);
+        const queryMatch = p.name.toLowerCase().includes(query.toLowerCase());
+        return catMatch && subMatch && queryMatch;
+      })
       .sort((a, b) => sort === 'low' ? lowestPrice(a) - lowestPrice(b) : sort === 'high' ? lowestPrice(b) - lowestPrice(a) : 0),
-    [catalog, category, query, sort]
+    [catalog, category, subSlug, query, sort]
   );
 
   const categoryImage = CATEGORY_IMAGES[category] ?? CATEGORY_IMAGES['Default']!;
-  const categorySubtitle = category === 'All'
-    ? 'Browse our full counter — sweets, namkeen, snacks, and gift boxes.'
-    : (categories.find(c => c.label === category)?.note ?? '');
+  const heroTitle = activeSubItem ? activeSubItem.label : (category === 'All' ? 'All Products' : category);
+  const heroSubtitle = activeSubItem
+    ? activeSubItem.subtitle
+    : (category === 'All'
+        ? 'Browse our full counter — sweets, namkeen, snacks, and gift boxes.'
+        : (categories.find(c => c.label === category)?.note ?? ''));
 
   return (
     <div className="min-h-screen">
       <PageHero
         image={categoryImage}
         label="Aggarwal Sweets · Sirsa"
-        title={category === 'All' ? 'All Products' : category}
-        subtitle={categorySubtitle}
+        title={heroTitle}
+        subtitle={heroSubtitle}
       />
 
       <div className="mx-auto max-w-7xl px-5 py-10 sm:px-8">
@@ -1055,10 +1137,16 @@ function ShopPage({
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-wrap gap-1">
             {(['All', 'Mithai', 'Namkeen', 'Snacks', 'Gifting'] as Category[]).map(cat => (
-              <button key={cat} onClick={() => setCategory(cat)}
-                className={`rounded-full px-4 py-2 text-xs font-bold transition-colors ${category === cat ? 'bg-primary text-primary-foreground' : 'hover:bg-muted border border-border'}`}
+              <button key={cat} onClick={() => { setCategory(cat); setSubSlug(''); }}
+                className={`rounded-full px-4 py-2 text-xs font-bold transition-colors ${category === cat && !subSlug ? 'bg-primary text-primary-foreground' : 'hover:bg-muted border border-border'}`}
                 data-testid={`shoppage-filter-${cat.toLowerCase()}`}>{cat}</button>
             ))}
+            {activeSubItem && (
+              <span className="flex items-center gap-1.5 rounded-full bg-secondary px-4 py-2 text-xs font-bold text-secondary-foreground">
+                {activeSubItem.label}
+                <button onClick={() => setSubSlug('')} className="ml-1 opacity-70 hover:opacity-100" aria-label="Clear subcategory">×</button>
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2 rounded-full border border-border bg-background px-4 py-2.5">
@@ -1091,7 +1179,7 @@ function ShopPage({
             <CircleAlert className="mx-auto size-8 text-secondary" />
             <h3 className="mt-4 font-display text-2xl">Nothing on this tray</h3>
             <p className="mt-2 text-sm text-muted-foreground">Try another name or clear your filters.</p>
-            <button onClick={() => { setQuery(''); setCategory('All'); }} className="mt-5 rounded-full bg-primary px-5 py-2.5 text-xs font-bold text-primary-foreground" data-testid="button-shoppage-clear">Clear filters</button>
+            <button onClick={() => { setQuery(''); setCategory('All'); setSubSlug(''); }} className="mt-5 rounded-full bg-primary px-5 py-2.5 text-xs font-bold text-primary-foreground" data-testid="button-shoppage-clear">Clear filters</button>
           </div>
         )}
       </div>
@@ -1112,7 +1200,9 @@ function BlogPage() {
       <div className="mx-auto max-w-7xl px-5 py-10 sm:px-8">
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-2">
           {blogPosts.map((post, i) => (
-            <article key={post.id} className={`group overflow-hidden rounded-2xl border border-border bg-background transition-all hover:-translate-y-1 hover:shadow-xl ${i === 0 ? 'sm:col-span-2' : ''}`}>
+            <Link key={post.id} href={`/blog/${post.slug}`}
+              className={`group overflow-hidden rounded-2xl border border-border bg-background transition-all hover:-translate-y-1 hover:shadow-xl ${i === 0 ? 'sm:col-span-2' : ''}`}
+              data-testid={`blog-card-${post.slug}`}>
               <div className={`relative overflow-hidden bg-muted ${i === 0 ? 'aspect-[2.5] sm:aspect-[3]' : 'aspect-[1.6]'}`}>
                 <img src={post.image} alt={post.title} className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105" />
                 <div className="absolute inset-0 bg-gradient-to-t from-primary/80 via-primary/20 to-transparent" />
@@ -1128,11 +1218,11 @@ function BlogPage() {
                 </div>
                 <h2 className="mt-2 font-display text-xl font-semibold leading-snug">{post.title}</h2>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">{post.excerpt}</p>
-                <button className="mt-4 flex items-center gap-1.5 text-xs font-bold text-secondary">
+                <span className="mt-4 flex items-center gap-1.5 text-xs font-bold text-secondary">
                   Read more <ArrowRight className="size-3.5" />
-                </button>
+                </span>
               </div>
-            </article>
+            </Link>
           ))}
         </div>
       </div>
@@ -1986,6 +2076,211 @@ function HomePage(props: ShellChildProps) {
   );
 }
 
+// ─── Blog Post Page ───────────────────────────────────────────────────────────
+function BlogPostPage() {
+  const params = useParams<{ slug: string }>();
+  const post = blogPosts.find(p => p.slug === params.slug);
+  const [, navigate] = useLocation();
+  if (!post) return <NotFound />;
+  return (
+    <div className="min-h-screen">
+      <PageHero image={post.image} label={post.category} title={post.title} subtitle={post.date + ' · ' + post.readTime + ' read'} />
+      <div className="mx-auto max-w-2xl px-5 py-12 sm:px-8">
+        <button onClick={() => navigate('/blog')} className="mb-8 flex items-center gap-1.5 text-xs font-bold text-secondary hover:underline">
+          <ChevronLeft className="size-3.5" /> All stories
+        </button>
+        <p className="mb-8 border-l-2 border-secondary pl-4 text-sm font-medium italic leading-relaxed text-muted-foreground">
+          {post.excerpt}
+        </p>
+        <div className="space-y-5">
+          {post.body.map((para, i) => (
+            <p key={i} className="text-sm leading-8 text-foreground">{para}</p>
+          ))}
+        </div>
+        <div className="mt-12 flex items-center justify-between border-t border-border pt-6">
+          <div className="text-xs text-muted-foreground">
+            <span className="font-bold text-foreground">Aggarwal Sweets</span> · Sirsa since 1978
+          </div>
+          <button onClick={() => navigate('/blog')} className="rounded-full bg-primary px-5 py-2.5 text-xs font-bold text-primary-foreground">
+            Back to stories
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Our Story Page ───────────────────────────────────────────────────────────
+function OurStoryPage() {
+  return (
+    <div className="min-h-screen">
+      <PageHero
+        image="/ladoo-plate.jpg"
+        label="Aggarwal Sweets · Sirsa"
+        title="Our Story"
+        subtitle="A family recipe for keeping traditions alive since 1978."
+      />
+      {/* Main story */}
+      <div className="mx-auto max-w-7xl px-5 py-16 sm:px-8">
+        <div className="grid gap-12 lg:grid-cols-[.85fr_1.15fr] lg:items-center">
+          <div className="relative mx-auto max-w-sm w-full">
+            <div className="absolute -inset-4 rounded-[2rem] border border-secondary/30" />
+            <img src="/ladoo-plate.jpg" alt="Traditional sweets" className="relative aspect-[.85] w-full rounded-[2rem] object-cover" />
+            <div className="absolute -bottom-5 -right-4 grid size-24 place-items-center rounded-full bg-accent text-center font-display text-lg leading-tight text-accent-foreground shadow-lg">
+              45+<small className="block font-sans text-[9px] font-bold uppercase tracking-wide">years of<br/>sweetness</small>
+            </div>
+          </div>
+          <div>
+            <p className="font-mono-ui text-[10px] uppercase tracking-[.25em] text-secondary">The Aggarwal way</p>
+            <h2 className="mt-3 font-display text-4xl font-semibold leading-tight sm:text-5xl">
+              Some recipes are measured in grams.<br /><em className="font-normal text-secondary">Ours are measured in memories.</em>
+            </h2>
+            <p className="mt-6 text-sm leading-7 text-muted-foreground">What started as a small counter in the heart of Sirsa in 1978 still begins the same way: good ingredients, patient hands, and a family member tasting the first batch before anything reaches the customer.</p>
+            <p className="mt-4 text-sm leading-7 text-muted-foreground">Three generations later, the kadais are the same. The recipes haven't been written down — they live in the hands of the people who make them. That is not a romantic notion. It is the reason no machine can replace what we do.</p>
+            <div className="mt-8 grid grid-cols-3 gap-5 border-t border-border pt-6">
+              <div><p className="font-display text-2xl">1978</p><p className="mt-1 text-[11px] text-muted-foreground">Our first batch</p></div>
+              <div><p className="font-display text-2xl">18</p><p className="mt-1 text-[11px] text-muted-foreground">Recipes we guard</p></div>
+              <div><p className="font-display text-2xl">4.9<span className="text-base">/5</span></p><p className="mt-1 text-[11px] text-muted-foreground">Happy households</p></div>
+            </div>
+          </div>
+        </div>
+
+        {/* Values */}
+        <div className="mt-20">
+          <p className="font-mono-ui text-[10px] uppercase tracking-[.25em] text-secondary">What we believe</p>
+          <h3 className="mt-2 font-display text-3xl">The principles behind every batch</h3>
+          <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            {[
+              { title: 'Only pure desi ghee', body: 'We have never substituted oil for ghee. The fat in ghee carries flavour that refined oil cannot. This one decision costs more and tastes incomparably better.' },
+              { title: 'Small batches, every day', body: 'We make less so we can sell it fresh. Leftover mithai doesn\'t leave our kitchen in a box with your name on it — it goes to the family or is donated.' },
+              { title: 'No artificial colour', body: 'The orange in our motichoor comes from saffron. The green in our pista barfi comes from real pistachios. Colours should taste like something.' },
+              { title: 'Family tasting ritual', body: 'Every new batch must pass a single test: is it good enough to serve at our own table? If any family member says no, the batch doesn\'t go out.' },
+              { title: 'Open counters', body: 'Our kitchen is visible from the shop floor. You can watch the barfi being poured, the ladoos being rolled. We have nothing to hide and several things to show.' },
+              { title: 'Fair to farmers', body: 'Our cashews come from a cooperative in coastal Karnataka. Our milk from a dairy collective in Fatehabad. Good ingredients require good relationships.' },
+            ].map(({ title, body }) => (
+              <div key={title} className="rounded-2xl border border-border bg-background p-6">
+                <h4 className="font-display text-lg font-semibold">{title}</h4>
+                <p className="mt-3 text-sm leading-6 text-muted-foreground">{body}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* CTA */}
+        <div className="mt-16 rounded-3xl bg-primary px-8 py-12 text-center text-primary-foreground">
+          <p className="font-mono-ui text-[10px] uppercase tracking-[.3em] text-accent">Come say hello</p>
+          <h3 className="mt-3 font-display text-3xl sm:text-4xl">12, Hissar Road, Sirsa</h3>
+          <p className="mt-3 text-sm text-primary-foreground/70">Open daily · 9:00 AM – 9:30 PM</p>
+          <div className="mt-6 flex flex-wrap justify-center gap-4">
+            <Link href="/shop" className="rounded-full bg-accent px-6 py-3 text-sm font-bold text-accent-foreground">Browse our sweets</Link>
+            <Link href="/contact" className="rounded-full border border-primary-foreground/25 px-6 py-3 text-sm font-bold text-primary-foreground">Get in touch</Link>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Contact Page ─────────────────────────────────────────────────────────────
+function ContactPage() {
+  const [form, setForm] = useState({ name: '', phone: '', message: '' });
+  const [sent, setSent] = useState(false);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setSent(true);
+  };
+
+  return (
+    <div className="min-h-screen">
+      <PageHero
+        image="/hero-mithai.jpg"
+        label="Aggarwal Sweets · Sirsa"
+        title="Get in Touch"
+        subtitle="We're at the counter six days a week. Come visit, call, or send us a message."
+      />
+      <div className="mx-auto max-w-7xl px-5 py-12 sm:px-8">
+        <div className="grid gap-12 lg:grid-cols-[1fr_1.1fr] lg:items-start">
+
+          {/* Info column */}
+          <div className="space-y-8">
+            <div className="rounded-2xl border border-border bg-background p-6">
+              <p className="font-mono-ui text-[10px] uppercase tracking-widest text-secondary">Visit us</p>
+              <h3 className="mt-2 font-display text-2xl">Our counter</h3>
+              <p className="mt-3 text-sm leading-7 text-muted-foreground">
+                12, Hissar Road<br />Near Clock Tower, Sirsa<br />Haryana · 125 055
+              </p>
+              <p className="mt-4 text-sm leading-6 text-muted-foreground">
+                <span className="font-bold text-foreground">Open daily</span> — 9:00 AM to 9:30 PM<br />
+                Closed on national holidays
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-border bg-background p-6">
+              <p className="font-mono-ui text-[10px] uppercase tracking-widest text-secondary">Call or WhatsApp</p>
+              <h3 className="mt-2 font-display text-2xl">Direct line</h3>
+              <a href="tel:01666234786" className="mt-3 flex items-center gap-3 text-sm font-bold hover:text-secondary" data-testid="contact-phone">
+                <Phone className="size-4 text-secondary" /> 01666 234 786
+              </a>
+              <a href="https://wa.me/911666234786?text=Hello%2C%20I%20would%20like%20to%20order%20sweets" target="_blank" rel="noreferrer"
+                className="mt-3 flex items-center gap-3 text-sm font-bold hover:text-secondary" data-testid="contact-whatsapp">
+                <MessageCircle className="size-4 fill-[#25D366] text-[#25D366]" /> WhatsApp us
+              </a>
+              <a href="mailto:orders@aggarwalsweets.in" className="mt-3 flex items-center gap-3 text-sm font-bold hover:text-secondary" data-testid="contact-email">
+                <Mail className="size-4 text-secondary" /> orders@aggarwalsweets.in
+              </a>
+            </div>
+
+            <div className="rounded-2xl border border-border bg-background p-6">
+              <p className="font-mono-ui text-[10px] uppercase tracking-widest text-secondary">Bulk & corporate orders</p>
+              <h3 className="mt-2 font-display text-2xl">Large quantities?</h3>
+              <p className="mt-3 text-sm leading-6 text-muted-foreground">For orders above 5 kg or corporate gifting requirements, contact us at least 72 hours in advance. We'll confirm availability and arrange fresh production for your date.</p>
+            </div>
+          </div>
+
+          {/* Message form */}
+          <div className="rounded-2xl border border-border bg-background p-6 sm:p-8">
+            <p className="font-mono-ui text-[10px] uppercase tracking-widest text-secondary">Send a message</p>
+            <h3 className="mt-2 font-display text-2xl">We read every note</h3>
+            {sent ? (
+              <div className="mt-6 flex flex-col items-center gap-4 py-8 text-center">
+                <div className="grid size-16 place-items-center rounded-full bg-accent text-accent-foreground">
+                  <Check className="size-8" />
+                </div>
+                <h4 className="font-display text-2xl">Message received!</h4>
+                <p className="text-sm text-muted-foreground">We usually respond within a few hours during shop hours (9 AM – 9:30 PM).</p>
+                <button onClick={() => { setSent(false); setForm({ name: '', phone: '', message: '' }); }}
+                  className="rounded-full border border-border px-5 py-2.5 text-xs font-bold">Send another</button>
+              </div>
+            ) : (
+              <form onSubmit={handleSubmit} className="mt-6 space-y-4" data-testid="form-contact">
+                <div>
+                  <label className="mb-2 block text-xs font-bold uppercase tracking-wider" htmlFor="contact-name">Your name</label>
+                  <input id="contact-name" required value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                    placeholder="How should we address you?" className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-ring" data-testid="input-contact-name" />
+                </div>
+                <div>
+                  <label className="mb-2 block text-xs font-bold uppercase tracking-wider" htmlFor="contact-phone">Phone number</label>
+                  <input id="contact-phone" type="tel" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
+                    placeholder="Optional — for a quicker reply" className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-ring" data-testid="input-contact-phone" />
+                </div>
+                <div>
+                  <label className="mb-2 block text-xs font-bold uppercase tracking-wider" htmlFor="contact-message">Your message</label>
+                  <textarea id="contact-message" required rows={5} value={form.message} onChange={e => setForm(f => ({ ...f, message: e.target.value }))}
+                    placeholder="Order enquiry, feedback, bulk request…" className="w-full resize-none rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-ring" data-testid="input-contact-message" />
+                </div>
+                <button type="submit" className="flex w-full items-center justify-center gap-2 rounded-full bg-secondary py-4 text-sm font-bold text-secondary-foreground" data-testid="button-contact-send">
+                  <Send className="size-4" /> Send message
+                </button>
+              </form>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Router ───────────────────────────────────────────────────────────────────
 function StoreRouter() {
   return (
@@ -2001,8 +2296,17 @@ function StoreRouter() {
               <Route path="/shop">
                 <ShopPage {...props} />
               </Route>
+              <Route path="/blog/:slug">
+                {() => <BlogPostPage />}
+              </Route>
               <Route path="/blog">
                 <BlogPage />
+              </Route>
+              <Route path="/our-story">
+                <OurStoryPage />
+              </Route>
+              <Route path="/contact">
+                <ContactPage />
               </Route>
               <Route path="/account">
                 <AccountPage
