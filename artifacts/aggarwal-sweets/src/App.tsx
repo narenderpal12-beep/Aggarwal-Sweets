@@ -11,7 +11,7 @@ import {
   Trash2, Wheat, CircleAlert, LogIn, KeyRound, BookOpen, Send, MessageCircle,
   Package, ListOrdered, Settings, Home, ChevronRight as Chevron, Lock, RotateCcw, FlaskConical,
   LogOut, Eye, EyeOff, Pencil, RefreshCw, Users, Loader2,
-  Tag, Percent, Upload, Palette, FileText, ImageIcon, Type, LayoutList
+  Tag, Percent, Upload, Palette, FileText, ImageIcon, Type, LayoutList, Facebook
 } from 'lucide-react';
 import NotFound from '@/pages/not-found';
 
@@ -794,17 +794,37 @@ function Header({
 }
 
 // ─── Marquees ─────────────────────────────────────────────────────────────────
+const DEFAULT_PROMO_ITEMS = [
+  'Fresh batches packed daily in Sirsa',
+  'Free local delivery over ₹799',
+  'COD available across Sirsa',
+  'Order before 4 PM for next-day delivery',
+];
+const DEFAULT_BENEFIT_ITEMS = [
+  'Freshly prepared',
+  'Lab-tested ingredients',
+  'On-time local delivery',
+  'Easy returns on unopened boxes',
+  'Made with care in Sirsa',
+];
+const BENEFIT_ICONS = [PackageCheck, ShieldCheck, Truck, BadgeCheck, Heart];
+
 function PromoMarquee() {
+  const settings = useSiteSettings();
+  const items: string[] = (() => {
+    try {
+      const stored = settings.promo_strip ? JSON.parse(settings.promo_strip) : null;
+      if (Array.isArray(stored) && stored.length) return stored;
+    } catch { /* fall through */ }
+    return DEFAULT_PROMO_ITEMS;
+  })();
   return (
     <div className="promo-marquee border-b border-primary-foreground/10 bg-primary text-primary-foreground" aria-label="Store promotions">
       <div className="marquee-window">
         <div className="marquee-track promo-track">
           {[0, 1].map(copy => (
             <div className="flex items-center" key={copy} aria-hidden={copy === 1}>
-              <span>Fresh batches packed daily in Sirsa</span><i />
-              <span>Free local delivery over ₹799</span><i />
-              <span>COD available across Sirsa</span><i />
-              <span>Order before 4 PM for next-day delivery</span><i />
+              {items.flatMap((item, i) => [<span key={i}>{item}</span>, <i key={`d${i}`} />])}
             </div>
           ))}
         </div>
@@ -814,17 +834,24 @@ function PromoMarquee() {
 }
 
 function BenefitMarquee() {
+  const settings = useSiteSettings();
+  const items: string[] = (() => {
+    try {
+      const stored = settings.benefit_strip ? JSON.parse(settings.benefit_strip) : null;
+      if (Array.isArray(stored) && stored.length) return stored;
+    } catch { /* fall through */ }
+    return DEFAULT_BENEFIT_ITEMS;
+  })();
   return (
     <div className="benefit-marquee border-b border-primary-foreground/10 bg-secondary text-secondary-foreground" aria-label="Aggarwal Sweets service promises">
       <div className="marquee-window">
         <div className="marquee-track benefit-track">
           {[0, 1].map(copy => (
             <div className="flex items-center" key={copy} aria-hidden={copy === 1}>
-              <span><PackageCheck /> Freshly prepared</span><i />
-              <span><ShieldCheck /> Lab-tested ingredients</span><i />
-              <span><Truck /> On-time local delivery</span><i />
-              <span><BadgeCheck /> Easy returns on unopened boxes</span><i />
-              <span><Heart /> Made with care in Sirsa</span><i />
+              {items.flatMap((item, i) => {
+                const Icon = BENEFIT_ICONS[i % BENEFIT_ICONS.length];
+                return [<span key={i}><Icon /> {item}</span>, <i key={`d${i}`} />];
+              })}
             </div>
           ))}
         </div>
@@ -916,9 +943,11 @@ function Hero({ onShop }: { onShop: () => void }) {
             </div>
             <div className="mt-1 font-mono-ui text-[10px] uppercase tracking-wider">Loved across Sirsa</div>
           </div>
-          <div className="absolute right-0 top-5 grid size-20 place-items-center rounded-full border border-accent bg-secondary text-center text-[10px] font-bold uppercase leading-tight text-secondary-foreground shadow-lg sm:right-8 sm:top-10">
-            {slide.badge.map(line => <span key={line}>{line}</span>)}
-          </div>
+          {Array.isArray((slide as never as {badge?:string[]}).badge) && (slide as never as {badge:string[]}).badge.length > 0 && (
+            <div className="absolute right-0 top-5 grid size-20 place-items-center rounded-full border border-accent bg-secondary text-center text-[10px] font-bold uppercase leading-tight text-secondary-foreground shadow-lg sm:right-8 sm:top-10">
+              {(slide as never as {badge:string[]}).badge.map((line: string) => <span key={line}>{line}</span>)}
+            </div>
+          )}
         </div>
       </div>
       <div className="relative z-10 mx-auto flex max-w-7xl items-center justify-between gap-5 px-5 pb-8 sm:px-8 sm:pb-10">
@@ -1491,8 +1520,9 @@ function Footer() {
             </div>
             <p className="mt-4 max-w-xs text-sm leading-6 text-primary-foreground/60">Sweets that taste like the good news has just arrived.</p>
             <div className="mt-5 flex gap-3">
-              <a href="https://instagram.com" className="grid size-8 place-items-center rounded-full border border-primary-foreground/20" aria-label="Instagram" data-testid="link-instagram"><Instagram className="size-4" /></a>
-              <a href="mailto:hello@aggarwalsweets.in" className="grid size-8 place-items-center rounded-full border border-primary-foreground/20" aria-label="Email us" data-testid="link-email"><Mail className="size-4" /></a>
+              <a href="https://facebook.com" className="grid size-8 place-items-center rounded-full border border-primary-foreground/20 hover:border-primary-foreground/50 transition-colors" aria-label="Facebook" data-testid="link-facebook"><Facebook className="size-4" /></a>
+              <a href="https://instagram.com" className="grid size-8 place-items-center rounded-full border border-primary-foreground/20 hover:border-primary-foreground/50 transition-colors" aria-label="Instagram" data-testid="link-instagram"><Instagram className="size-4" /></a>
+              <a href="mailto:hello@aggarwalsweets.in" className="grid size-8 place-items-center rounded-full border border-primary-foreground/20 hover:border-primary-foreground/50 transition-colors" aria-label="Email us" data-testid="link-email"><Mail className="size-4" /></a>
             </div>
           </div>
           <div>
@@ -2746,6 +2776,10 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
   const [slidesSaved, setSlidesSaved] = useState(false);
   const [localUnits, setLocalUnits] = useState<string[]>([]);
   const [unitsSaved, setUnitsSaved] = useState(false);
+  const [localPromo, setLocalPromo] = useState<string[]>([]);
+  const [promoSaved, setPromoSaved] = useState(false);
+  const [localBenefit, setLocalBenefit] = useState<string[]>([]);
+  const [benefitSaved, setBenefitSaved] = useState(false);
 
   const defaults: Record<string, string> = { name: 'Aggarwal Sweets', address: '12, Hissar Road, Sirsa', phone: '01666234786', hours: '9:00 AM – 9:30 PM' };
   const si = { ...defaults, ...storeInfo };
@@ -2763,8 +2797,27 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
       // Units
       try { const u = s.unit_presets ? JSON.parse(s.unit_presets) : null; setLocalUnits(Array.isArray(u) ? u : UNIT_PRESETS); }
       catch { setLocalUnits(UNIT_PRESETS); }
+      // Promo strip
+      try { const p = s.promo_strip ? JSON.parse(s.promo_strip) : null; setLocalPromo(Array.isArray(p) ? p : DEFAULT_PROMO_ITEMS); }
+      catch { setLocalPromo(DEFAULT_PROMO_ITEMS); }
+      // Benefit strip
+      try { const b = s.benefit_strip ? JSON.parse(s.benefit_strip) : null; setLocalBenefit(Array.isArray(b) ? b : DEFAULT_BENEFIT_ITEMS); }
+      catch { setLocalBenefit(DEFAULT_BENEFIT_ITEMS); }
     }).catch(() => {});
   }, []);
+
+  const savePromo = async () => {
+    const val = JSON.stringify(localPromo.filter(Boolean));
+    await fetch(`${API}/settings/promo_strip`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: val }) });
+    window.dispatchEvent(new Event('aggarwal-settings-updated'));
+    setPromoSaved(true); setTimeout(() => setPromoSaved(false), 2500);
+  };
+  const saveBenefit = async () => {
+    const val = JSON.stringify(localBenefit.filter(Boolean));
+    await fetch(`${API}/settings/benefit_strip`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: val }) });
+    window.dispatchEvent(new Event('aggarwal-settings-updated'));
+    setBenefitSaved(true); setTimeout(() => setBenefitSaved(false), 2500);
+  };
 
   const saveCategories = async () => {
     const val = JSON.stringify(localCats);
@@ -2978,6 +3031,27 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
                   <label className="text-[10px] font-bold uppercase tracking-wider">Description</label>
                   <textarea rows={2} value={slide.description} onChange={e => setLocalSlides(ss => ss.map((s, i) => i === idx ? { ...s, description: e.target.value as never } : s))} className="mt-1 w-full resize-none rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
                 </div>
+                <div className="sm:col-span-2">
+                  <label className="text-[10px] font-bold uppercase tracking-wider">Red circle badge <span className="font-normal normal-case text-muted-foreground">(comma-separated lines, e.g. Small, batch, joy)</span></label>
+                  <input
+                    value={Array.isArray((slide as never as { badge?: string[] }).badge) ? ((slide as never as { badge: string[] }).badge).join(', ') : ''}
+                    onChange={e => {
+                      const lines = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
+                      setLocalSlides(ss => ss.map((s, i) => i === idx ? { ...s, badge: lines as never } : s));
+                    }}
+                    placeholder="Small, batch, joy"
+                    className="mt-1 w-full rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+                  />
+                  {/* Live preview of the circle */}
+                  {Array.isArray((slide as never as { badge?: string[] }).badge) && (slide as never as { badge: string[] }).badge.length > 0 && (
+                    <div className="mt-2 flex items-center gap-2">
+                      <div className="grid size-16 place-items-center rounded-full border border-secondary bg-secondary text-center text-[9px] font-bold uppercase leading-tight text-secondary-foreground shadow">
+                        {(slide as never as { badge: string[] }).badge.map((line: string) => <span key={line}>{line}</span>)}
+                      </div>
+                      <span className="text-xs text-muted-foreground">Preview</span>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           ))}
@@ -2987,6 +3061,54 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
               className="rounded-xl bg-primary px-5 py-2 text-sm font-bold text-primary-foreground hover:opacity-90">
               Save slider
             </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Promo strip (top ticker) */}
+      <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+        <h3 className="font-semibold">Top announcement strip</h3>
+        <p className="mt-1 text-sm text-muted-foreground">The scrolling green ticker at the very top of every page. Add, edit, or remove messages.</p>
+        <div className="mt-4 space-y-2">
+          {localPromo.map((item, idx) => (
+            <div key={idx} className="flex gap-2">
+              <input value={item} onChange={e => setLocalPromo(ps => ps.map((p, i) => i === idx ? e.target.value : p))}
+                placeholder="e.g. Free delivery over ₹799" className="flex-1 rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
+              <button type="button" onClick={() => setLocalPromo(ps => ps.filter((_, i) => i !== idx))}
+                className="grid size-9 place-items-center rounded-lg border border-red-200 text-red-400 hover:bg-red-50"><Trash2 className="size-3.5" /></button>
+            </div>
+          ))}
+          <button type="button" onClick={() => setLocalPromo(ps => [...ps, ''])}
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border py-2.5 text-sm font-bold text-muted-foreground hover:bg-muted">
+            <Plus className="size-4" /> Add message
+          </button>
+          <div className="flex items-center justify-end gap-3 pt-1">
+            {promoSaved && <span className="text-xs font-semibold text-green-600">✓ Saved!</span>}
+            <button type="button" onClick={savePromo} className="rounded-xl bg-primary px-5 py-2 text-sm font-bold text-primary-foreground hover:opacity-90">Save strip</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Benefit strip (below nav) */}
+      <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+        <h3 className="font-semibold">Benefit strip</h3>
+        <p className="mt-1 text-sm text-muted-foreground">The red scrolling strip just below the navigation bar. Icons cycle automatically.</p>
+        <div className="mt-4 space-y-2">
+          {localBenefit.map((item, idx) => (
+            <div key={idx} className="flex gap-2">
+              <input value={item} onChange={e => setLocalBenefit(bs => bs.map((b, i) => i === idx ? e.target.value : b))}
+                placeholder="e.g. Freshly prepared" className="flex-1 rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
+              <button type="button" onClick={() => setLocalBenefit(bs => bs.filter((_, i) => i !== idx))}
+                className="grid size-9 place-items-center rounded-lg border border-red-200 text-red-400 hover:bg-red-50"><Trash2 className="size-3.5" /></button>
+            </div>
+          ))}
+          <button type="button" onClick={() => setLocalBenefit(bs => [...bs, ''])}
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border py-2.5 text-sm font-bold text-muted-foreground hover:bg-muted">
+            <Plus className="size-4" /> Add message
+          </button>
+          <div className="flex items-center justify-end gap-3 pt-1">
+            {benefitSaved && <span className="text-xs font-semibold text-green-600">✓ Saved!</span>}
+            <button type="button" onClick={saveBenefit} className="rounded-xl bg-primary px-5 py-2 text-sm font-bold text-primary-foreground hover:opacity-90">Save strip</button>
           </div>
         </div>
       </div>
