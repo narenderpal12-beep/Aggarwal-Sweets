@@ -4,20 +4,18 @@
   "license": "MIT",
   "private": true,
   "workspaces": [
-    "artifacts/*",
-    "lib/*",
-    "scripts"
+    "artifacts/aggarwal-sweets",
+    "artifacts/api-server",
+    "lib/db"
   ],
   "scripts": {
-    "build": "npm run typecheck && npm run build --workspaces --if-present",
-    "typecheck:libs": "tsc --build",
-    "typecheck": "npm run typecheck:libs && npm run typecheck --workspaces --if-present"
-  },
-  "dependencies": {
-    "@replit/connectors-sdk": "^0.4.1"
+    "build": "npm run typecheck && npm run build --workspace=@workspace/aggarwal-sweets && npm run build --workspace=@workspace/api-server",
+    "db:setup": "npm run push --workspace=@workspace/db",
+    "dev": "npm start",
+    "start": "npm run build && node --enable-source-maps artifacts/api-server/dist/index.mjs",
+    "typecheck": "npm run typecheck --workspace=@workspace/db && npm run typecheck --workspace=@workspace/aggarwal-sweets && npm run typecheck --workspace=@workspace/api-server"
   },
   "devDependencies": {
-    "prettier": "^3.9.6",
     "typescript": "~5.9.3"
   }
 }

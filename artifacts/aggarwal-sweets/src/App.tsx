@@ -2032,7 +2032,17 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
       setCatalog(Array.isArray(p) ? p : []);
       setOrders(Array.isArray(o) ? o : []);
       setCustomers(Array.isArray(c) ? c : []);
-      setBlogPosts(Array.isArray(b) ? b.map((post: Record<string,unknown>) => ({ ...post, body: Array.isArray(post.body) ? post.body : [] })) : []);
+      setBlogPosts(
+        Array.isArray(b)
+          ? b.map((post: unknown): BlogPost => {
+              const value = post as BlogPost;
+              return {
+                ...value,
+                body: Array.isArray(value.body) ? value.body : [],
+              };
+            })
+          : [],
+      );
       setCoupons(Array.isArray(coupList) ? coupList : []);
       setAdminReviews(Array.isArray(revList) ? revList : []);
       if (s && typeof s === 'object') setAdminSettings(s as Record<string, string>);
