@@ -17,10 +17,10 @@ storefront and its Express API from the same port.
    npm install
    ```
 
-2. Copy `.env.example` to `.env` and set `DATABASE_URL` to a PostgreSQL
-   connection string. The application reads environment variables from the
-   process; use your preferred local environment loader or export them before
-   running commands.
+2. Copy `.env.example` to `.env` and set **`DATABASE_URL`** (uppercase) to a
+   PostgreSQL connection string. The application loads `.env` automatically.
+   Environment variable names are case-sensitive, so `database_url` will not
+   work.
 
 3. Create or update the database tables:
 

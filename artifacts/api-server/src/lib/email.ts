@@ -1,5 +1,5 @@
 import nodemailer from "nodemailer";
-
+import dotenv from "dotenv";
 const GMAIL_USER = (process.env.GMAIL_USER ?? "").trim();
 const GMAIL_PASS = (process.env.GMAIL_APP_PASSWORD ?? "").replace(/\s/g, "");
 const ADMIN_EMAIL = GMAIL_USER; // same inbox receives all admin notifications
@@ -9,7 +9,13 @@ export const isEmailConfigured = () => Boolean(GMAIL_USER && GMAIL_PASS);
 
 const transporter = nodemailer.createTransport({
   service: "gmail",
+  host: "smtp.gmail.com",
+  port: 465,
+  secure: true,
   auth: { user: GMAIL_USER, pass: GMAIL_PASS },
+  tls: {
+    rejectUnauthorized: false,
+  },
 });
 
 // ─── OTP ──────────────────────────────────────────────────────────────────────

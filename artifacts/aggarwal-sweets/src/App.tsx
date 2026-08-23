@@ -653,26 +653,32 @@ function Header({
 
   return (
     <header className="sticky top-0 z-30 border-b border-border/70 bg-background/95 backdrop-blur-xl">
-      <div className="mx-auto flex max-w-7xl items-center gap-4 px-5 py-4 sm:px-8">
-        <button className="md:hidden" onClick={() => setMenuOpen(!menuOpen)} aria-label="Open menu" data-testid="button-open-menu">
-          <Menu className="size-5" />
-        </button>
-
-        <Link href="/" className="group shrink-0" data-testid="link-home">
-          {logoUrl ? (
-            <img src={logoUrl} alt="Aggarwal Sweets" className="h-10 w-auto object-contain" />
-          ) : (
-            <div className="flex items-center gap-2.5">
-              <div className="relative grid size-10 place-items-center rounded-full border-2 border-accent bg-primary text-accent shadow-sm">
-                <Sparkles className="size-5" />
-              </div>
-              <div>
-                <div className="font-display text-xl font-bold leading-none tracking-tight">Aggarwal</div>
-                <div className="font-mono-ui mt-1 text-[9px] uppercase tracking-[.3em] text-secondary">Sweets · Sirsa</div>
-              </div>
-            </div>
-          )}
-        </Link>
+  <div className="relative mx-auto flex max-w-7xl items-center gap-4 px-5 py-4 sm:px-8 md:pl-[220px]">
+    <button
+      className="md:hidden"
+      onClick={() => setMenuOpen(!menuOpen)}
+      aria-label="Open menu"
+      data-testid="button-open-menu"
+    >
+      <Menu className="size-5" />
+    </button>
+    <Link
+      href="/"
+      className="group flex h-10 shrink-0 items-center overflow-visible md:absolute md:left-8 md:top-1/2 md:-translate-y-1/2"
+      data-testid="link-home"
+    >
+      {logoUrl ? (
+        <img
+          src={logoUrl} style={{top:'-4px'}}
+          alt="Aggarwal Sweets"
+          className="relative z-10 h-16 w-auto max-w-[190px] object-contain md:h-[80px] md:max-w-[220px]"
+        />
+      ) : (
+        <div className="flex items-center gap-2.5">
+          {/* existing fallback logo content */}
+        </div>
+      )}
+    </Link>
 
         {/* Desktop nav */}
         <nav className="hidden items-center gap-1 text-sm font-semibold md:flex" aria-label="Main navigation">
@@ -1609,21 +1615,33 @@ function Newsletter({ value, setValue, done, onSubmit }: { value: string; setVal
   );
 }
 
-function Footer() {
+function Footer({ logoUrl }: { logoUrl?: string }) {
   return (
     <footer id="visit" className="scroll-mt-20 bg-primary text-primary-foreground">
       <div className="mx-auto max-w-7xl px-5 py-12 sm:px-8">
         <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-[1.3fr_1fr_1fr_1.2fr]">
           <div>
-            <div className="flex items-center gap-2">
-              <div className="grid size-9 place-items-center rounded-full border-2 border-accent text-accent"><Sparkles className="size-4" /></div>
-              <div className="font-display text-xl">Aggarwal</div>
-            </div>
+          <div className="flex items-center gap-2">
+  {logoUrl ? (
+    <img
+      src={logoUrl}
+      alt="Aggarwal Sweets"
+      className="h-12 w-auto max-w-[190px] object-contain"
+    />
+  ) : (
+    <>
+      <div className="grid size-9 place-items-center rounded-full border-2 border-accent text-accent">
+        <Sparkles className="size-4" />
+      </div>
+      <div className="font-display text-xl">Aggarwal</div>
+    </>
+  )}
+</div>
             <p className="mt-4 max-w-xs text-sm leading-6 text-primary-foreground/60">Sweets that taste like the good news has just arrived.</p>
             <div className="mt-5 flex gap-3">
-              <a href="https://facebook.com" className="grid size-8 place-items-center rounded-full border border-primary-foreground/20 hover:border-primary-foreground/50 transition-colors" aria-label="Facebook" data-testid="link-facebook"><Facebook className="size-4" /></a>
-              <a href="https://instagram.com" className="grid size-8 place-items-center rounded-full border border-primary-foreground/20 hover:border-primary-foreground/50 transition-colors" aria-label="Instagram" data-testid="link-instagram"><Instagram className="size-4" /></a>
-              <a href="mailto:hello@aggarwalsweets.in" className="grid size-8 place-items-center rounded-full border border-primary-foreground/20 hover:border-primary-foreground/50 transition-colors" aria-label="Email us" data-testid="link-email"><Mail className="size-4" /></a>
+              <a href="https://www.facebook.com/share/1Ek7Hv157g/" className="grid size-8 place-items-center rounded-full border border-primary-foreground/20 hover:border-primary-foreground/50 transition-colors" aria-label="Facebook" data-testid="link-facebook"><Facebook className="size-4" /></a>
+              <a href="https://instagram.com/Aggarwal_sweets_sirsa" className="grid size-8 place-items-center rounded-full border border-primary-foreground/20 hover:border-primary-foreground/50 transition-colors" aria-label="Instagram" data-testid="link-instagram"><Instagram className="size-4" /></a>
+              <a href="mailto:Aggarwalsweetssirsa@gmail.com" className="grid size-8 place-items-center rounded-full border border-primary-foreground/20 hover:border-primary-foreground/50 transition-colors" aria-label="Email us" data-testid="link-email"><Mail className="size-4" /></a>
             </div>
           </div>
           <div>
@@ -1638,7 +1656,7 @@ function Footer() {
           </div>
           <div>
             <p className="font-mono-ui text-[10px] uppercase tracking-widest text-accent">Find us</p>
-            <p className="mt-4 text-sm leading-6 text-primary-foreground/65">12, Hissar Road<br />Near Clock Tower, Sirsa<br />Haryana · 125055</p>
+            <p className="mt-4 text-sm leading-6 text-primary-foreground/65">Bhadra Bazar<br />Sirsa<br />Haryana · 125055</p>
           </div>
           <div>
             <p className="font-mono-ui text-[10px] uppercase tracking-widest text-accent">Come say hello</p>
@@ -3584,8 +3602,8 @@ function AdminPage() {
 
 // ─── Floating Contact Buttons ─────────────────────────────────────────────────
 function FloatingButtons() {
-  const PHONE = '01666234786';
-  const WA_NUMBER = '911666234786';
+  const PHONE = '+919671500121';
+  const WA_NUMBER = '+919671500121';
   const WA_MSG = encodeURIComponent('Hello! I would like to order sweets from Aggarwal Sweets Sirsa.');
   return (
     <div className="fixed bottom-6 right-5 z-40 flex flex-col items-end gap-3" aria-label="Quick contact">
@@ -4005,7 +4023,7 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
 
         {children(shellProps)}
 
-        <Footer />
+       <Footer logoUrl={siteSettings.logo_url} />
         <FloatingButtons />
 
         {detail && <ProductDrawer product={detail} onClose={() => setDetail(null)} onAdd={addToCart} />}
@@ -4206,7 +4224,7 @@ function ContactPage() {
               <p className="font-mono-ui text-[10px] uppercase tracking-widest text-secondary">Visit us</p>
               <h3 className="mt-2 font-display text-2xl">Our counter</h3>
               <p className="mt-3 text-sm leading-7 text-muted-foreground">
-                12, Hissar Road<br />Near Clock Tower, Sirsa<br />Haryana · 125 055
+              Bhadra Bazar<br />Sirsa<br />Haryana · 125 055
               </p>
               <p className="mt-4 text-sm leading-6 text-muted-foreground">
                 <span className="font-bold text-foreground">Open daily</span> — 9:00 AM to 9:30 PM<br />
@@ -4217,15 +4235,15 @@ function ContactPage() {
             <div className="rounded-2xl border border-border bg-background p-6">
               <p className="font-mono-ui text-[10px] uppercase tracking-widest text-secondary">Call or WhatsApp</p>
               <h3 className="mt-2 font-display text-2xl">Direct line</h3>
-              <a href="tel:01666234786" className="mt-3 flex items-center gap-3 text-sm font-bold hover:text-secondary" data-testid="contact-phone">
+              <a href="tel:9671500121" className="mt-3 flex items-center gap-3 text-sm font-bold hover:text-secondary" data-testid="contact-phone">
                 <Phone className="size-4 text-secondary" /> 01666 234 786
               </a>
-              <a href="https://wa.me/911666234786?text=Hello%2C%20I%20would%20like%20to%20order%20sweets" target="_blank" rel="noreferrer"
+              <a href="https://wa.me/9671500121?text=Hello%2C%20I%20would%20like%20to%20order%20sweets" target="_blank" rel="noreferrer"
                 className="mt-3 flex items-center gap-3 text-sm font-bold hover:text-secondary" data-testid="contact-whatsapp">
                 <MessageCircle className="size-4 fill-[#25D366] text-[#25D366]" /> WhatsApp us
               </a>
-              <a href="mailto:orders@aggarwalsweets.in" className="mt-3 flex items-center gap-3 text-sm font-bold hover:text-secondary" data-testid="contact-email">
-                <Mail className="size-4 text-secondary" /> orders@aggarwalsweets.in
+              <a href="mailto:Aggarwalsweetssirsa@gmail.com" className="mt-3 flex items-center gap-3 text-sm font-bold hover:text-secondary" data-testid="contact-email">
+                <Mail className="size-4 text-secondary" /> Aggarwalsweetssirsa@gmail.com
               </a>
             </div>
 
