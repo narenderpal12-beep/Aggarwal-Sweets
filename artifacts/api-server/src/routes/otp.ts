@@ -4,6 +4,7 @@ import { otpCodesTable } from "@workspace/db/schema";
 import { eq, and, gt } from "drizzle-orm";
 import { sendOtpEmail, isEmailConfigured } from "../lib/email.js";
 import { randomUUID } from "node:crypto";
+import { createSession } from "../lib/session.js";
 
 const router = Router();
 
@@ -82,6 +83,7 @@ router.post("/auth/otp/verify", async (req, res) => {
     .set({ used: true })
     .where(eq(otpCodesTable.id, record.id));
 
+  createSession(res, record.email, "customer");
   res.json({ success: true, email: record.email });
 });
 

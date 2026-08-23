@@ -311,25 +311,14 @@ async function apiFetchCatalog(): Promise<Product[]> {
   } catch { return products; /* static fallback */ }
 }
 
-async function apiSaveOrderToDb(order: OrderRecord): Promise<OrderRecord | null> {
+async function apiSaveOrderToDb(order: OrderRecord): Promise<void> {
   try {
-    const response = await fetch(`${API}/orders`, {
+    await fetch(`${API}/orders`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(order),
     });
-    if (!response.ok) return null;
-    const savedOrder = await response.json() as OrderRecord;
-    window.dispatchEvent(new Event('aggarwal-order-created'));
-    return savedOrder;
-  } catch { return null; }
-}
-
-async function apiFetchCustomerOrders(): Promise<OrderRecord[]> {
-  const response = await fetch(`${API}/orders/mine`, { credentials: 'include' });
-  if (!response.ok) throw new Error('Could not load orders');
-  const data = await response.json();
-  return Array.isArray(data) ? data as OrderRecord[] : [];
+  } catch { /* non-fatal — customer still sees their order in localStorage */ }
 }
 
 async function apiSendOtp(email: string): Promise<{ success: boolean; error?: string }> {
@@ -356,17 +345,14 @@ async function apiVerifyOtp(email: string, code: string): Promise<{ success: boo
   } catch { return { success: false, error: 'Network error. Please try again.' }; }
 }
 
-async function apiTrackCustomer(user: AuthUser): Promise<boolean> {
+async function apiTrackCustomer(user: AuthUser): Promise<void> {
   try {
-    const response = await fetch(`${API}/customers`, {
+    await fetch(`${API}/customers`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: user.email, name: user.name }),
     });
-    if (!response.ok) return false;
-    window.dispatchEvent(new Event('aggarwal-customer-updated'));
-    return true;
-  } catch { return false; }
+  } catch { /* non-fatal */ }
 }
 
 async function apiValidateAdmin(email: string, password: string): Promise<boolean> {
@@ -667,30 +653,32 @@ function Header({
 
   return (
     <header className="sticky top-0 z-30 border-b border-border/70 bg-background/95 backdrop-blur-xl">
-      <div className="relative mx-auto flex max-w-7xl items-center gap-4 px-5 py-4 sm:px-8 md:pl-[220px]">
-        <button className="md:hidden" onClick={() => setMenuOpen(!menuOpen)} aria-label="Open menu" data-testid="button-open-menu">
-          <Menu className="size-5" />
-        </button>
-
-        <Link
-          href="/"
-          className="group flex h-10 shrink-0 items-center overflow-visible md:absolute md:left-8 md:top-1/2 md:-translate-y-1/2"
-          data-testid="link-home"
-        >
-          {logoUrl ? (
-            <img src={logoUrl} alt="Aggarwal Sweets" style={{ top: '-4px' }} className="relative z-10 h-16 w-auto max-w-[190px] object-contain md:h-[80px] md:max-w-[220px]" />
-          ) : (
-            <div className="flex items-center gap-2.5">
-              <div className="relative grid size-10 place-items-center rounded-full border-2 border-accent bg-primary text-accent shadow-sm">
-                <Sparkles className="size-5" />
-              </div>
-              <div>
-                <div className="font-display text-xl font-bold leading-none tracking-tight">Aggarwal</div>
-                <div className="font-mono-ui mt-1 text-[9px] uppercase tracking-[.3em] text-secondary">Sweets · Sirsa</div>
-              </div>
-            </div>
-          )}
-        </Link>
+  <div className="relative mx-auto flex max-w-7xl items-center gap-4 px-5 py-4 sm:px-8 md:pl-[220px]">
+    <button
+      className="md:hidden"
+      onClick={() => setMenuOpen(!menuOpen)}
+      aria-label="Open menu"
+      data-testid="button-open-menu"
+    >
+      <Menu className="size-5" />
+    </button>
+    <Link
+      href="/"
+      className="group flex h-10 shrink-0 items-center overflow-visible md:absolute md:left-8 md:top-1/2 md:-translate-y-1/2"
+      data-testid="link-home"
+    >
+      {logoUrl ? (
+        <img
+          src={logoUrl} style={{top:'-4px'}}
+          alt="Aggarwal Sweets"
+          className="relative z-10 h-16 w-auto max-w-[190px] object-contain md:h-[80px] md:max-w-[220px]"
+        />
+      ) : (
+        <div className="flex items-center gap-2.5">
+          {/* existing fallback logo content */}
+        </div>
+      )}
+    </Link>
 
         {/* Desktop nav */}
         <nav className="hidden items-center gap-1 text-sm font-semibold md:flex" aria-label="Main navigation">
@@ -1633,16 +1621,22 @@ function Footer({ logoUrl }: { logoUrl?: string }) {
       <div className="mx-auto max-w-7xl px-5 py-12 sm:px-8">
         <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-[1.3fr_1fr_1fr_1.2fr]">
           <div>
-            <div className="flex items-center gap-2">
-              {logoUrl ? (
-                <img src={logoUrl} alt="Aggarwal Sweets" className="h-12 w-auto max-w-[190px] object-contain" />
-              ) : (
-                <>
-                  <div className="grid size-9 place-items-center rounded-full border-2 border-accent text-accent"><Sparkles className="size-4" /></div>
-                  <div className="font-display text-xl">Aggarwal</div>
-                </>
-              )}
-            </div>
+          <div className="flex items-center gap-2">
+  {logoUrl ? (
+    <img
+      src={logoUrl}
+      alt="Aggarwal Sweets"
+      className="h-12 w-auto max-w-[190px] object-contain"
+    />
+  ) : (
+    <>
+      <div className="grid size-9 place-items-center rounded-full border-2 border-accent text-accent">
+        <Sparkles className="size-4" />
+      </div>
+      <div className="font-display text-xl">Aggarwal</div>
+    </>
+  )}
+</div>
             <p className="mt-4 max-w-xs text-sm leading-6 text-primary-foreground/60">Sweets that taste like the good news has just arrived.</p>
             <div className="mt-5 flex gap-3">
               <a href="https://www.facebook.com/share/1Ek7Hv157g/" className="grid size-8 place-items-center rounded-full border border-primary-foreground/20 hover:border-primary-foreground/50 transition-colors" aria-label="Facebook" data-testid="link-facebook"><Facebook className="size-4" /></a>
@@ -1666,7 +1660,7 @@ function Footer({ logoUrl }: { logoUrl?: string }) {
           </div>
           <div>
             <p className="font-mono-ui text-[10px] uppercase tracking-widest text-accent">Come say hello</p>
-            <p className="mt-4 text-sm leading-6 text-primary-foreground/65">Open daily · 9:00 AM – 9:30 PM<br />+91 96715 00121<br />Aggarwalsweetssirsa@gmail.com</p>
+            <p className="mt-4 text-sm leading-6 text-primary-foreground/65">Open daily · 9:00 AM – 9:30 PM<br />01666 234 786<br />orders@aggarwalsweets.in</p>
             <Link href="/admin" className="mt-5 inline-flex items-center gap-2 text-xs font-bold text-accent" data-testid="link-admin-footer">Owner portal <ArrowRight className="size-3" /></Link>
           </div>
         </div>
@@ -1862,21 +1856,13 @@ function CartDrawer({ cart, subtotal, updateQty, onClose, onCheckout, user, onAu
 }
 
 // ─── Checkout ─────────────────────────────────────────────────────────────────
-function Checkout({ subtotal, cart, onClose, onDone, onOrderCreated, user }: {
-  subtotal: number; cart: CartLine[]; onClose: () => void; onDone: (order: OrderRecord) => void;
-  onOrderCreated: (order: OrderRecord) => void; user: AuthUser | null;
-}) {
+function Checkout({ subtotal, cart, onClose, onDone, user }: { subtotal: number; cart: CartLine[]; onClose: () => void; onDone: (order: OrderRecord) => void; user: AuthUser | null }) {
   const [submitted, setSubmitted] = useState(false);
   const [orderId] = useState(() => `AGS-${Math.floor(1000 + Math.random() * 8999)}`);
   const [orderRef, setOrderRef] = useState<OrderRecord | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState('');
 
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (submitting) return;
-    setSubmitting(true);
-    setSubmitError('');
     const form = e.currentTarget;
     const address = (form.querySelector('#customer-address') as HTMLTextAreaElement)?.value ?? '';
     const phone = (form.querySelector('#customer-phone') as HTMLInputElement)?.value ?? '';
@@ -1890,16 +1876,11 @@ function Checkout({ subtotal, cart, onClose, onDone, onOrderCreated, user }: {
       phone,
       customerEmail: user?.role === 'customer' ? user.email : undefined,
     };
-    const savedOrder = await apiSaveOrderToDb(order);
-    if (!savedOrder) {
-      setSubmitError('We could not save your order. Please check your connection and try again.');
-      setSubmitting(false);
-      return;
-    }
-    onOrderCreated(savedOrder);
-    setOrderRef(savedOrder);
+    // Save locally (customer account view) and persist to DB (admin view, triggers emails)
+    saveOrderLocal(order);
+    apiSaveOrderToDb(order);
+    setOrderRef(order);
     setSubmitted(true);
-    setSubmitting(false);
   };
 
   if (submitted && orderRef) return (
@@ -1951,9 +1932,8 @@ function Checkout({ subtotal, cart, onClose, onDone, onOrderCreated, user }: {
             <div className="flex justify-between text-sm"><span>Order total</span><b className="font-mono-ui">{money(subtotal)}</b></div>
             <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground"><Banknote className="size-4 text-secondary" /> Cash on delivery · no advance payment</div>
           </div>
-          {submitError && <p className="text-center text-xs font-semibold text-destructive">{submitError}</p>}
-          <button type="submit" disabled={submitting} className="flex w-full items-center justify-center gap-2 rounded-full bg-secondary py-4 text-sm font-bold text-secondary-foreground disabled:cursor-not-allowed disabled:opacity-60" data-testid="button-place-order">
-            {submitting ? <><Loader2 className="size-4 animate-spin" /> Saving order…</> : <>Place COD order <Check className="size-4" /></>}
+          <button type="submit" className="flex w-full items-center justify-center gap-2 rounded-full bg-secondary py-4 text-sm font-bold text-secondary-foreground" data-testid="button-place-order">
+            Place COD order <Check className="size-4" />
           </button>
         </form>
       </div>
@@ -2087,17 +2067,7 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
     } finally { setDataLoading(false); }
   };
 
-  useEffect(() => {
-    fetchAll();
-    const refreshTimer = window.setInterval(fetchAll, 15_000);
-    window.addEventListener('aggarwal-order-created', fetchAll);
-    window.addEventListener('aggarwal-customer-updated', fetchAll);
-    return () => {
-      window.clearInterval(refreshTimer);
-      window.removeEventListener('aggarwal-order-created', fetchAll);
-      window.removeEventListener('aggarwal-customer-updated', fetchAll);
-    };
-  }, []);
+  useEffect(() => { fetchAll(); }, []);
 
   const refreshAll = () => { fetchAll(); };
 
@@ -2120,10 +2090,8 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
 
   // Order status
   const updateOrderStatus = async (id: string, status: OrderStatus) => {
-    const response = await fetch(`${API}/orders/${id}/status`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
-    if (!response.ok) return;
+    await fetch(`${API}/orders/${id}/status`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
     setOrders(prev => prev.map(o => o.id === id ? { ...o, status } : o));
-    window.dispatchEvent(new Event('aggarwal-order-updated'));
   };
 
   const navItems: { key: AdminSection; icon: typeof LayoutDashboard; label: string }[] = [
@@ -2940,7 +2908,6 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
   const [pwMsg, setPwMsg] = useState('');
   const [storeInfo, setStoreInfo] = useState<Record<string, string>>({});
   const [storeMsg, setStoreMsg] = useState('');
-  const [logoMsg, setLogoMsg] = useState('');
   const [dangerMsg, setDangerMsg] = useState('');
   // Local editable states (saved only on button click)
   const [localCats, setLocalCats] = useState<CravingCat[]>([]);
@@ -3124,46 +3091,23 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
             <div className="flex items-center gap-3">
               <img src={storeInfo.logo_url} alt="Logo" className="h-14 rounded-xl border border-border object-contain bg-muted p-1" />
               <button type="button" onClick={async () => {
-                setLogoMsg('');
-                try {
-                  const response = await fetch(`${API}/settings/logo_url`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ value: '' }),
-                  });
-                  if (!response.ok) throw new Error();
-                  setStoreInfo(s => ({ ...s, logo_url: '' }));
-                  window.dispatchEvent(new Event('aggarwal-settings-updated'));
-                  setLogoMsg('ok:Logo removed.');
-                } catch {
-                  setLogoMsg('error:Could not remove the logo. Please try again.');
-                }
+                await fetch(`${API}/settings/logo_url`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: '' }) });
+                setStoreInfo(s => ({ ...s, logo_url: '' }));
+                window.dispatchEvent(new Event('aggarwal-settings-updated'));
               }} className="text-xs text-red-500 hover:underline">Remove logo</button>
             </div>
           )}
           <input type="file" accept="image/*" onChange={async e => {
             const file = e.target.files?.[0]; if (!file) return;
-            setLogoMsg('');
             const reader = new FileReader();
             reader.onloadend = async () => {
               const b64 = reader.result as string;
-              try {
-                const response = await fetch(`${API}/settings/logo_url`, {
-                  method: 'PUT',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ value: b64 }),
-                });
-                if (!response.ok) throw new Error();
-                setStoreInfo(s => ({ ...s, logo_url: b64 }));
-                window.dispatchEvent(new Event('aggarwal-settings-updated'));
-                setLogoMsg('ok:Logo saved successfully.');
-              } catch {
-                setLogoMsg('error:Logo could not be saved. Please try a smaller image.');
-              }
+              await fetch(`${API}/settings/logo_url`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: b64 }) });
+              setStoreInfo(s => ({ ...s, logo_url: b64 }));
+              window.dispatchEvent(new Event('aggarwal-settings-updated'));
             };
             reader.readAsDataURL(file);
           }} className="rounded-xl border border-input px-4 py-2.5 text-sm" />
-          {logoMsg && <p className={`rounded-xl px-4 py-2 text-xs font-bold ${msgCls(logoMsg)}`}>{msgTxt(logoMsg)}</p>}
         </div>
       </div>
 
@@ -3659,7 +3603,7 @@ function AdminPage() {
 // ─── Floating Contact Buttons ─────────────────────────────────────────────────
 function FloatingButtons() {
   const PHONE = '+919671500121';
-  const WA_NUMBER = '919671500121';
+  const WA_NUMBER = '+919671500121';
   const WA_MSG = encodeURIComponent('Hello! I would like to order sweets from Aggarwal Sweets Sirsa.');
   return (
     <div className="fixed bottom-6 right-5 z-40 flex flex-col items-end gap-3" aria-label="Quick contact">
@@ -3696,15 +3640,12 @@ const ORDER_STATUSES: Record<OrderStatus, { label: string; color: string }> = {
   Delivered:         { label: 'Delivered', color: 'bg-green-100 text-green-700' },
 };
 
-function AccountPage({ user, wishlist, orders, catalog, onAuthOpen, onLogout, onUserUpdate, onWishlist, onDetail }: {
+function AccountPage({ user, wishlist, catalog, onAuthOpen, onLogout, onDetail }: {
   user: AuthUser | null;
   wishlist: string[];
-  orders: OrderRecord[];
   catalog: Product[];
   onAuthOpen: () => void;
   onLogout: () => void;
-  onUserUpdate: (user: AuthUser) => void;
-  onWishlist: (id: string) => void;
   onDetail: (p: Product) => void;
 }) {
   const [, navigate] = useLocation();
@@ -3713,6 +3654,7 @@ function AccountPage({ user, wishlist, orders, catalog, onAuthOpen, onLogout, on
   const [tab, setTab] = useState<'orders' | 'wishlist' | 'profile' | 'addresses'>(
     (['orders', 'wishlist', 'profile', 'addresses'] as const).includes(urlTab as 'orders') ? urlTab as 'orders' : 'orders'
   );
+  const [orders, setOrders] = useState<OrderRecord[]>(readOrders);
   const [name, setName] = useState(user?.name ?? '');
   const [nameSaved, setNameSaved] = useState(false);
   const [address, setAddress] = useState(() => {
@@ -3751,8 +3693,8 @@ function AccountPage({ user, wishlist, orders, catalog, onAuthOpen, onLogout, on
         subtitle={user.email}
       />
 
-      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-8 sm:py-8">
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:gap-8">
+      <div className="mx-auto max-w-7xl px-5 py-8 sm:px-8">
+        <div className="flex gap-8 lg:items-start">
           {/* Sidebar */}
           <aside className="hidden w-52 shrink-0 lg:block">
             <nav className="space-y-1 rounded-2xl border border-border bg-background p-2 shadow-sm">
@@ -3773,12 +3715,12 @@ function AccountPage({ user, wishlist, orders, catalog, onAuthOpen, onLogout, on
           </aside>
 
           {/* Mobile tab bar */}
-          <div className="w-full lg:hidden">
-            <div className="grid grid-cols-2 gap-1 rounded-2xl border border-border bg-background p-2 shadow-sm sm:flex">
+          <div className="lg:hidden w-full mb-6">
+            <div className="flex gap-1 overflow-auto rounded-2xl border border-border bg-background p-2 shadow-sm">
               {tabs.map(({ key, label, icon: Icon }) => (
                 <button key={key} onClick={() => setTab(key)}
-                  className={`flex min-w-0 items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold transition-colors sm:shrink-0 ${tab === key ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}>
-                  <Icon className="size-3.5 shrink-0" /> <span className="truncate">{label}</span>
+                  className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold transition-colors ${tab === key ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}>
+                  <Icon className="size-3.5" /> {label}
                 </button>
               ))}
             </div>
@@ -3791,7 +3733,7 @@ function AccountPage({ user, wishlist, orders, catalog, onAuthOpen, onLogout, on
               <div>
                 <h2 className="mb-5 font-display text-2xl">My Orders</h2>
                 {orders.length === 0 ? (
-                  <div className="rounded-2xl border border-border bg-background p-8 text-center sm:p-12">
+                  <div className="rounded-2xl border border-border bg-background p-12 text-center">
                     <Package className="mx-auto size-12 text-muted-foreground/40" />
                     <p className="mt-4 font-display text-xl">No orders yet</p>
                     <p className="mt-2 text-sm text-muted-foreground">Your placed orders will appear here.</p>
@@ -3802,38 +3744,33 @@ function AccountPage({ user, wishlist, orders, catalog, onAuthOpen, onLogout, on
                 ) : (
                   <div className="space-y-4">
                     {orders.map(order => (
-                      <div key={order.id} className="rounded-2xl border border-border bg-background p-4 shadow-sm sm:p-5">
-                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                          <div className="min-w-0">
+                      <div key={order.id} className="rounded-2xl border border-border bg-background p-5 shadow-sm">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
                             <p className="font-mono-ui text-xs text-muted-foreground">{order.date}</p>
-                            <p className="mt-1 break-all font-display text-lg font-semibold">{order.id}</p>
+                            <p className="mt-1 font-display text-lg font-semibold">{order.id}</p>
                             <p className="text-xs text-muted-foreground">{order.items.reduce((s, l) => s + l.quantity, 0)} items · {money(order.subtotal)}</p>
                           </div>
-                          <span className={`self-start whitespace-nowrap rounded-full px-3 py-1 text-xs font-bold ${ORDER_STATUSES[order.status].color}`}>
+                          <span className={`rounded-full px-3 py-1 text-xs font-bold ${ORDER_STATUSES[order.status].color}`}>
                             {ORDER_STATUSES[order.status].label}
                           </span>
                         </div>
                         {/* Items */}
-                        <div className="mt-4 grid gap-2 sm:flex sm:flex-wrap sm:gap-3">
-                          {order.items.map((line, i) => {
-                            const legacyLine = line as CartLine & { productId?: string };
-                            const itemProduct = line.product ?? catalog.find(product => product.id === legacyLine.productId);
-                            const itemName = itemProduct?.name ?? 'Order item';
-                            return (
-                              <div key={i} className="flex min-w-0 items-center gap-2 rounded-xl bg-muted/50 p-2 sm:rounded-none sm:bg-transparent sm:p-0">
-                                <img src={itemProduct?.image ?? '/hero-mithai.jpg'} alt={itemName} className="size-12 rounded-xl object-cover" />
-                                <div className="min-w-0">
-                                  <p className="truncate text-xs font-semibold">{itemName}</p>
-                                  <p className="text-[10px] text-muted-foreground">{line.variant?.weight ?? 'Standard'} × {line.quantity ?? 1}</p>
-                                </div>
+                        <div className="mt-4 flex flex-wrap gap-3">
+                          {order.items.map((line, i) => (
+                            <div key={i} className="flex items-center gap-2">
+                              <img src={line.product.image} alt={line.product.name} className="size-12 rounded-xl object-cover" />
+                              <div>
+                                <p className="text-xs font-semibold">{line.product.name}</p>
+                                <p className="text-[10px] text-muted-foreground">{line.variant.weight} × {line.quantity}</p>
                               </div>
-                            );
-                          })}
+                            </div>
+                          ))}
                         </div>
                         {order.address && (
-                          <p className="mt-3 flex break-words text-xs text-muted-foreground">
+                          <p className="mt-3 flex items-start gap-1.5 text-xs text-muted-foreground">
                             <MapPin className="mt-0.5 size-3.5 shrink-0" />
-                            <span className="ml-1.5">{order.address}</span>
+                            {order.address}
                           </p>
                         )}
                       </div>
@@ -3859,21 +3796,16 @@ function AccountPage({ user, wishlist, orders, catalog, onAuthOpen, onLogout, on
                 ) : (
                   <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3">
                     {wishlisted.map(product => (
-                      <div key={product.id} className="group relative overflow-hidden rounded-2xl border border-border bg-background text-left transition-all hover:-translate-y-1 hover:shadow-lg">
-                        <button onClick={() => onWishlist(product.id)} aria-label={`Remove ${product.name} from wishlist`}
-                          className="absolute right-2 top-2 z-10 grid size-8 place-items-center rounded-full bg-background/90 text-secondary shadow-sm backdrop-blur hover:bg-background">
-                          <Heart className="size-4 fill-current" />
-                        </button>
-                        <button onClick={() => onDetail(product)} className="block w-full text-left">
+                      <button key={product.id} onClick={() => onDetail(product)}
+                        className="group overflow-hidden rounded-2xl border border-border bg-background text-left transition-all hover:-translate-y-1 hover:shadow-lg">
                         <div className="relative aspect-square overflow-hidden bg-muted">
                           <img src={product.image} alt={product.name} className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105" />
                         </div>
                         <div className="p-3">
-                          <p className="min-h-10 line-clamp-2 font-display text-sm font-semibold sm:text-base">{product.name}</p>
+                          <p className="font-display text-base font-semibold">{product.name}</p>
                           <p className="mt-1 text-xs text-muted-foreground">From {money(lowestPrice(product))}</p>
                         </div>
-                        </button>
-                      </div>
+                      </button>
                     ))}
                   </div>
                 )}
@@ -3900,7 +3832,7 @@ function AccountPage({ user, wishlist, orders, catalog, onAuthOpen, onLogout, on
                   <button
                     onClick={() => {
                       const updated: AuthUser = { ...user, name };
-                      onUserUpdate(updated);
+                      localStorage.setItem('aggarwal-user', JSON.stringify(updated));
                       setNameSaved(true);
                     }}
                     className="flex items-center gap-2 rounded-full bg-primary px-5 py-3 text-xs font-bold text-primary-foreground"
@@ -3950,10 +3882,8 @@ function AccountPage({ user, wishlist, orders, catalog, onAuthOpen, onLogout, on
 type ShellChildProps = {
   catalog: Product[];
   wishlist: string[];
-  orders: OrderRecord[];
   user: AuthUser | null;
   onWishlist: (id: string) => void;
-  onUserUpdate: (user: AuthUser) => void;
   onDetail: (p: Product) => void;
   onAdd: (p: Product, v?: ProductVariant) => void;
   onAuthOpen: () => void;
@@ -3972,7 +3902,6 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
   const [wishlist, setWishlist] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('aggarwal-wishlist') || '[]'); } catch { return []; }
   });
-  const [orders, setOrders] = useState<OrderRecord[]>([]);
   const [user, setUser] = useState<AuthUser | null>(readUser);
   const [cartOpen, setCartOpen] = useState(false);
   const [detail, setDetail] = useState<Product | null>(null);
@@ -3987,40 +3916,6 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
 
   useEffect(() => { localStorage.setItem('aggarwal-cart', JSON.stringify(cart)); }, [cart]);
   useEffect(() => { localStorage.setItem('aggarwal-wishlist', JSON.stringify(wishlist)); }, [wishlist]);
-
-  useEffect(() => {
-    if (user?.role !== 'customer') {
-      setOrders([]);
-      return;
-    }
-    const customerEmail = user.email;
-    let cancelled = false;
-    const refreshOrders = async () => {
-      const localOrders = readOrders().filter(order => order.customerEmail === customerEmail);
-      try {
-        const remoteOrders = await apiFetchCustomerOrders();
-        if (cancelled) return;
-        const seen = new Set<string>();
-        setOrders([...remoteOrders, ...localOrders].filter(order => {
-          if (seen.has(order.id)) return false;
-          seen.add(order.id);
-          return true;
-        }));
-      } catch {
-        if (!cancelled) setOrders(localOrders);
-      }
-    };
-    refreshOrders();
-    const refreshTimer = window.setInterval(refreshOrders, 30_000);
-    window.addEventListener('aggarwal-order-created', refreshOrders);
-    window.addEventListener('aggarwal-order-updated', refreshOrders);
-    return () => {
-      cancelled = true;
-      window.clearInterval(refreshTimer);
-      window.removeEventListener('aggarwal-order-created', refreshOrders);
-      window.removeEventListener('aggarwal-order-updated', refreshOrders);
-    };
-  }, [user?.email, user?.role]);
 
   // Fetch settings & apply brand colors
   const fetchSettings = () => {
@@ -4055,10 +3950,6 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
     setCart(curr => curr.map((l, i) => i === index ? { ...l, quantity: Math.max(0, l.quantity + delta) } : l).filter(l => l.quantity > 0));
   const toggleWishlist = (id: string) =>
     setWishlist(curr => curr.includes(id) ? curr.filter(i => i !== id) : [...curr, id]);
-  const handleOrderCreated = (order: OrderRecord) => {
-    saveOrderLocal(order);
-    setOrders(curr => [order, ...curr.filter(existing => existing.id !== order.id)]);
-  };
   const itemCount = cart.reduce((s, l) => s + l.quantity, 0);
   const subtotal = cart.reduce((s, l) => s + l.variant.price * l.quantity, 0);
   const discount = coupon?.discount ?? 0;
@@ -4091,11 +3982,6 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
       setCheckout(true);
     }
   };
-  const handleUserUpdate = (updatedUser: AuthUser) => {
-    localStorage.setItem('aggarwal-user', JSON.stringify(updatedUser));
-    setUser(updatedUser);
-    if (updatedUser.role !== 'admin') apiTrackCustomer(updatedUser);
-  };
 
   const handleProceedCheckout = () => {
     setCartOpen(false);
@@ -4109,9 +3995,8 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
 
   const [, shellNavigate] = useLocation();
   const shellProps: ShellChildProps = {
-    catalog, wishlist, orders, user,
+    catalog, wishlist, user,
     onWishlist: toggleWishlist,
-    onUserUpdate: handleUserUpdate,
     onDetail: (p) => shellNavigate('/product/' + p.id),
     onAdd: addToCart,
     onAuthOpen: () => setAuthOpen(true),
@@ -4138,7 +4023,7 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
 
         {children(shellProps)}
 
-        <Footer logoUrl={siteSettings.logo_url} />
+       <Footer logoUrl={siteSettings.logo_url} />
         <FloatingButtons />
 
         {detail && <ProductDrawer product={detail} onClose={() => setDetail(null)} onAdd={addToCart} />}
@@ -4159,7 +4044,6 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
             subtotal={finalTotal} cart={cart}
             onClose={() => setCheckout(false)}
             onDone={(_order) => { setCheckout(false); setOrdered(true); setCart([]); setCoupon(null); }}
-            onOrderCreated={handleOrderCreated}
             user={user}
           />
         )}
@@ -4340,7 +4224,7 @@ function ContactPage() {
               <p className="font-mono-ui text-[10px] uppercase tracking-widest text-secondary">Visit us</p>
               <h3 className="mt-2 font-display text-2xl">Our counter</h3>
               <p className="mt-3 text-sm leading-7 text-muted-foreground">
-                Bhadra Bazar<br />Sirsa<br />Haryana · 125 055
+              Bhadra Bazar<br />Sirsa<br />Haryana · 125 055
               </p>
               <p className="mt-4 text-sm leading-6 text-muted-foreground">
                 <span className="font-bold text-foreground">Open daily</span> — 9:00 AM to 9:30 PM<br />
@@ -4351,10 +4235,10 @@ function ContactPage() {
             <div className="rounded-2xl border border-border bg-background p-6">
               <p className="font-mono-ui text-[10px] uppercase tracking-widest text-secondary">Call or WhatsApp</p>
               <h3 className="mt-2 font-display text-2xl">Direct line</h3>
-              <a href="tel:+919671500121" className="mt-3 flex items-center gap-3 text-sm font-bold hover:text-secondary" data-testid="contact-phone">
-                <Phone className="size-4 text-secondary" /> +91 96715 00121
+              <a href="tel:9671500121" className="mt-3 flex items-center gap-3 text-sm font-bold hover:text-secondary" data-testid="contact-phone">
+                <Phone className="size-4 text-secondary" /> 01666 234 786
               </a>
-              <a href="https://wa.me/919671500121?text=Hello%2C%20I%20would%20like%20to%20order%20sweets" target="_blank" rel="noreferrer"
+              <a href="https://wa.me/9671500121?text=Hello%2C%20I%20would%20like%20to%20order%20sweets" target="_blank" rel="noreferrer"
                 className="mt-3 flex items-center gap-3 text-sm font-bold hover:text-secondary" data-testid="contact-whatsapp">
                 <MessageCircle className="size-4 fill-[#25D366] text-[#25D366]" /> WhatsApp us
               </a>
@@ -4821,12 +4705,9 @@ function StoreRouter() {
                 <AccountPage
                   user={props.user}
                   wishlist={props.wishlist}
-                  orders={props.orders}
                   catalog={props.catalog}
                   onAuthOpen={props.onAuthOpen}
                   onLogout={props.onLogout}
-                  onUserUpdate={props.onUserUpdate}
-                  onWishlist={props.onWishlist}
                   onDetail={props.onDetail}
                 />
               </Route>

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { db, adminSettingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
+import { createSession } from "../lib/session.js";
 
 const ADMIN_EMAIL   = "admin@aggarwalsweets.in";
 const DEFAULT_ADMIN_PASSWORD = "Admin@123";
@@ -27,6 +28,7 @@ router.post("/auth/admin", async (req, res) => {
     email.toLowerCase() === ADMIN_EMAIL &&
     password === storedPassword
   ) {
+    createSession(res, ADMIN_EMAIL, "admin");
     res.json({ success: true });
   } else {
     res.status(401).json({ success: false, error: "Invalid credentials" });
