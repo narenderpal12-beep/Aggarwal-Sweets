@@ -11,9 +11,7 @@ import {
   Trash2, Wheat, CircleAlert, LogIn, KeyRound, BookOpen, Send, MessageCircle,
   Package, ListOrdered, Settings, Home, ChevronRight as Chevron, Lock, RotateCcw, FlaskConical,
   LogOut, Eye, EyeOff, Pencil, RefreshCw, Users, Loader2,
-  Tag, Percent, Upload, Palette, FileText, ImageIcon, Type, LayoutList, Facebook,
-  Bell, BellRing, Volume2, VolumeX, Download, CalendarDays, BarChart3, FileSpreadsheet,
-  Printer, TrendingUp, Filter, CircleDot
+  Tag, Percent, Upload, Palette, FileText, ImageIcon, Type, LayoutList, Facebook
 } from 'lucide-react';
 import NotFound from '@/pages/not-found';
 
@@ -31,25 +29,12 @@ type CouponCode = { code: string; type: 'percent' | 'amount'; value: number; min
 type AppliedCoupon = { code: string; discount: number };
 type CartLine = { product: Product; variant: ProductVariant; quantity: number };
 type AuthUser = { email: string; name?: string; role?: 'customer' | 'admin' };
-type CustomerRecord = {
-  email: string; name?: string; joinedAt: string; phone?: string; address?: string;
-  orderCount?: number; totalSpent?: number; lastOrderAt?: string;
-};
+type CustomerRecord = { email: string; name?: string; joinedAt: string };
 type OrderStatus = 'Confirmed' | 'Packing' | 'Out for delivery' | 'Delivered';
-type DeliveryDetails = {
-  receiverName: string;
-  deliveryRemarks: string;
-  deliveryContact: string;
-};
 type OrderRecord = {
   id: string; date: string; items: CartLine[]; subtotal: number;
   status: OrderStatus; address: string; phone: string;
-  customerEmail?: string; customerName?: string;
-  receiverName?: string; deliveryRemarks?: string; deliveryContact?: string;
-};
-type HeroSlide = {
-  id: string; eyebrow: string; heading: string; highlight: string; ending: string;
-  description: string; image: string; badge?: string[]; cta: string; secondary: string;
+  customerEmail?: string;
 };
 type BlogPost = {
   id: string; slug: string; title: string; excerpt: string;
@@ -304,82 +289,15 @@ const lowestPrice = (product: Product) =>
   Math.min(...product.variants.map(v => v.price), product.price);
 
 function readUser(): AuthUser | null {
-  try {
-    const stored = JSON.parse(localStorage.getItem('aggarwal-user') || 'null') as Partial<AuthUser> | null;
-    if (!stored || typeof stored.email !== 'string' || !stored.email.includes('@')) return null;
-    return {
-      email: stored.email.toLowerCase(),
-      name: typeof stored.name === 'string' ? stored.name : undefined,
-      role: stored.role === 'admin' ? 'admin' : 'customer',
-    };
-  } catch {
-    return null;
-  }
+  try { return JSON.parse(localStorage.getItem('aggarwal-user') || 'null'); } catch { return null; }
 }
-
-function readStoredArray(key: string): unknown[] {
-  try {
-    const stored = JSON.parse(localStorage.getItem(key) || '[]');
-    return Array.isArray(stored) ? stored : [];
-  } catch {
-    return [];
-  }
-}
-
-function normalizeOrder(value: unknown): OrderRecord | null {
-  if (!value || typeof value !== 'object') return null;
-  const order = value as Partial<OrderRecord>;
-  if (typeof order.id !== 'string' || !order.id) return null;
-  const validStatuses: OrderStatus[] = ['Confirmed', 'Packing', 'Out for delivery', 'Delivered'];
-  return {
-    id: order.id,
-    date: typeof order.date === 'string' ? order.date : '',
-    items: Array.isArray(order.items)
-      ? order.items
-          .filter((item): item is CartLine => Boolean(item && typeof item === 'object'))
-          .map(item => ({
-            ...item,
-            quantity: typeof item.quantity === 'number' && Number.isFinite(item.quantity) && item.quantity > 0
-              ? item.quantity
-              : 1,
-          }))
-      : [],
-    subtotal: typeof order.subtotal === 'number' && Number.isFinite(order.subtotal) ? order.subtotal : 0,
-    status: validStatuses.includes(order.status as OrderStatus) ? order.status as OrderStatus : 'Confirmed',
-    address: typeof order.address === 'string' ? order.address : '',
-    phone: typeof order.phone === 'string' ? order.phone : '',
-    customerEmail: typeof order.customerEmail === 'string' ? order.customerEmail : undefined,
-    customerName: typeof order.customerName === 'string' ? order.customerName : undefined,
-    receiverName: typeof order.receiverName === 'string' ? order.receiverName : undefined,
-    deliveryRemarks: typeof order.deliveryRemarks === 'string' ? order.deliveryRemarks : undefined,
-    deliveryContact: typeof order.deliveryContact === 'string' ? order.deliveryContact : undefined,
-  };
-}
-
+// Customer's own order history stays in localStorage (fast, works offline)
 function readOrders(): OrderRecord[] {
-  return readStoredArray('aggarwal-orders')
-    .map(normalizeOrder)
-    .filter((order): order is OrderRecord => Boolean(order));
+  try { return JSON.parse(localStorage.getItem('aggarwal-orders') || '[]'); } catch { return []; }
 }
 function saveOrderLocal(order: OrderRecord) {
-  const orders = readOrders().filter(existing => existing.id !== order.id);
+  const orders = readOrders();
   localStorage.setItem('aggarwal-orders', JSON.stringify([order, ...orders]));
-}
-function readCart(): CartLine[] {
-  return readStoredArray('aggarwal-cart').filter((value): value is CartLine => {
-    if (!value || typeof value !== 'object') return false;
-    const line = value as Partial<CartLine>;
-    return Boolean(
-      line.product?.id &&
-      line.variant &&
-      typeof line.quantity === 'number' &&
-      Number.isFinite(line.quantity) &&
-      line.quantity > 0
-    );
-  });
-}
-function readWishlist(): string[] {
-  return [...new Set(readStoredArray('aggarwal-wishlist').filter((id): id is string => typeof id === 'string'))];
 }
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
@@ -393,111 +311,49 @@ async function apiFetchCatalog(): Promise<Product[]> {
   } catch { return products; /* static fallback */ }
 }
 
-type SaveOrderResult =
-  | { order: OrderRecord; error?: never; message?: never }
-  | { order: null; error: 'authentication' | 'request'; message: string };
-
-async function apiSaveOrderToDb(order: OrderRecord): Promise<SaveOrderResult> {
+async function apiSaveOrderToDb(order: OrderRecord): Promise<OrderRecord | null> {
   try {
     const response = await fetch(`${API}/orders`, {
       method: 'POST',
-      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(order),
     });
-    const body = await response.json().catch(() => ({})) as { error?: unknown };
-    if (response.status === 401) {
-      return { order: null, error: 'authentication', message: 'Your sign-in has expired. Please sign in again to place this order.' };
-    }
-    if (!response.ok) {
-      return {
-        order: null,
-        error: 'request',
-        message: typeof body.error === 'string' ? body.error : 'We could not save your order. Please try again.',
-      };
-    }
-    const savedOrder = body as OrderRecord;
-    if (savedOrder.customerEmail && savedOrder.customerName) {
-      await apiTrackCustomer({ email: savedOrder.customerEmail, name: savedOrder.customerName, role: 'customer' });
-    }
+    if (!response.ok) return null;
+    const savedOrder = await response.json() as OrderRecord;
     window.dispatchEvent(new Event('aggarwal-order-created'));
-    return { order: savedOrder };
-  } catch {
-    return { order: null, error: 'request', message: 'We could not reach the order server. Please check your connection and try again.' };
-  }
-}
-
-async function apiCheckCustomerSession(): Promise<'valid' | 'invalid' | 'unavailable'> {
-  try {
-    const response = await fetch(`${API}/customers/me`, { credentials: 'include' });
-    if (response.status === 401) return 'invalid';
-    return response.ok ? 'valid' : 'unavailable';
-  } catch {
-    return 'unavailable';
-  }
+    return savedOrder;
+  } catch { return null; }
 }
 
 async function apiFetchCustomerOrders(): Promise<OrderRecord[]> {
   const response = await fetch(`${API}/orders/mine`, { credentials: 'include' });
   if (!response.ok) throw new Error('Could not load orders');
   const data = await response.json();
-  return Array.isArray(data)
-    ? data.map(normalizeOrder).filter((order): order is OrderRecord => Boolean(order))
-    : [];
-}
-
-async function apiFetchCustomerProfile(): Promise<AuthUser | null> {
-  try {
-    const response = await fetch(`${API}/customers/me`, { credentials: 'include' });
-    if (!response.ok) return null;
-    const customer = await response.json() as { email?: unknown; name?: unknown };
-    if (typeof customer.email !== 'string') return null;
-    return {
-      email: customer.email,
-      name: typeof customer.name === 'string' ? customer.name : undefined,
-      role: 'customer',
-    };
-  } catch {
-    return null;
-  }
-}
-
-async function apiLogout(): Promise<void> {
-  try {
-    await fetch(`${API}/auth/logout`, { method: 'POST', credentials: 'include' });
-  } catch {
-    // Local sign-out still completes if the network is temporarily unavailable.
-  }
+  return Array.isArray(data) ? data as OrderRecord[] : [];
 }
 
 async function apiSendOtp(email: string): Promise<{ success: boolean; error?: string }> {
   try {
     const r = await fetch(`${API}/auth/otp/send`, {
-      method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email }),
     });
-    const data = await r.json().catch(() => ({}));
+    const data = await r.json();
     if (!r.ok) return { success: false, error: data.error ?? 'Failed to send OTP' };
     return { success: true };
-  } catch (error) {
-    console.error('OTP send request failed', error);
-    return { success: false, error: 'Unable to reach the login server. Please try again.' };
-  }
+  } catch { return { success: false, error: 'Network error. Please try again.' }; }
 }
 
 async function apiVerifyOtp(email: string, code: string): Promise<{ success: boolean; error?: string }> {
   try {
     const r = await fetch(`${API}/auth/otp/verify`, {
-      method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, code }),
     });
-    const data = await r.json().catch(() => ({}));
+    const data = await r.json();
     if (!r.ok) return { success: false, error: data.error ?? 'Incorrect OTP' };
     return { success: true };
-  } catch (error) {
-    console.error('OTP verification request failed', error);
-    return { success: false, error: 'Unable to reach the login server. Please try again.' };
-  }
+  } catch { return { success: false, error: 'Network error. Please try again.' }; }
 }
 
 async function apiTrackCustomer(user: AuthUser): Promise<boolean> {
@@ -531,34 +387,6 @@ type MasterCategory = { id: string; label: string; note: string; image: string; 
 // ─── Site settings context ────────────────────────────────────────────────────
 const SiteSettingsContext = createContext<Record<string, string>>({});
 const useSiteSettings = () => useContext(SiteSettingsContext);
-
-function getConfiguredCategories(settings: Record<string, string>): MasterCategory[] {
-  try {
-    const stored = settings.categories_master ? JSON.parse(settings.categories_master) : null;
-    if (Array.isArray(stored) && stored.length) {
-      return (stored as MasterCategory[]).filter(category => typeof category.label === 'string' && category.label.trim());
-    }
-  } catch { /* use defaults */ }
-  return DEFAULT_MASTER_CATEGORIES;
-}
-
-function getConfiguredCategoryLabel(category: string, settings: Record<string, string>): string {
-  return getConfiguredCategories(settings).find(item => item.label.toLowerCase() === category.toLowerCase())?.label ?? category;
-}
-
-function categoryRouteSegment(category: string): string {
-  return encodeURIComponent(category.trim().toLowerCase().replace(/\s+/g, '-'));
-}
-
-function resolveConfiguredCategory(rawCategory: string | undefined, categories: MasterCategory[]): string {
-  if (!rawCategory) return 'All';
-  let decoded = rawCategory;
-  try { decoded = decodeURIComponent(rawCategory); } catch { /* keep original route value */ }
-  const normalized = decoded.trim().toLowerCase().replace(/\s+/g, '-');
-  return categories.find(category => categoryRouteSegment(category.label).toLowerCase() === encodeURIComponent(normalized).toLowerCase())?.label
-    ?? categories.find(category => category.label.toLowerCase() === decoded.toLowerCase())?.label
-    ?? decoded.replace(/-/g, ' ').replace(/\b\w/g, character => character.toUpperCase());
-}
 
 // ─── Unit presets ─────────────────────────────────────────────────────────────
 const UNIT_PRESETS = ['100 gm', '150 gm', '200 gm', '250 gm', '400 gm', '500 gm', '750 gm', '1 kg', '2 kg', 'per piece', 'per packet', 'per plate', 'per portion', 'per box'];
@@ -738,42 +566,18 @@ function AuthModal({ onClose, onLogin }: { onClose: () => void; onLogin: (user: 
 // ─── Dropdown Nav ─────────────────────────────────────────────────────────────
 function ShopDropdown({ onNavigate }: { onNavigate: (cat: string, slug?: string) => void }) {
   const settings = useSiteSettings();
-  const [catalog, setCatalog] = useState<Product[]>([]);
-  useEffect(() => {
-    fetch(`${API}/products`).then(r => r.ok ? r.json() : []).then(value => {
-      if (Array.isArray(value)) setCatalog(value as Product[]);
-    }).catch(() => {});
-  }, []);
   type DisplayCat = { label: string; subs: NavSubItem[] };
   const displayCats: DisplayCat[] = (() => {
     try {
       const stored = settings.categories_master ? JSON.parse(settings.categories_master) : null;
       if (Array.isArray(stored) && stored.length) {
-        return (stored as MasterCategory[]).filter(dc => dc.inMenu !== false).map(dc => {
+        return (stored as MasterCategory[]).filter(dc => dc.inMenu).map(dc => {
           const found = navCategories.find(nc => nc.label.toLowerCase() === dc.label.toLowerCase());
-          const productSubs: NavSubItem[] = catalog
-            .filter(product => product.category.toLowerCase() === dc.label.toLowerCase())
-            .map(product => ({
-              label: product.name,
-              slug: product.id,
-              subtitle: product.unit,
-              category: dc.label as Exclude<Category, 'All'>,
-            }));
-          return { label: dc.label, subs: productSubs.length ? productSubs : (found?.subs ?? []) };
+          return found ?? { label: dc.label, subs: [] };
         });
       }
     } catch { /* fall through */ }
-    return navCategories.map(category => {
-      const productSubs = catalog
-        .filter(product => product.category.toLowerCase() === category.label.toLowerCase())
-        .map(product => ({
-          label: product.name,
-          slug: product.id,
-          subtitle: product.unit,
-          category: category.label as Exclude<Category, 'All'>,
-        }));
-      return { ...category, subs: productSubs.length ? productSubs : category.subs };
-    });
+    return navCategories as DisplayCat[];
   })();
   const [hoveredLabel, setHoveredLabel] = useState('');
   const hoveredCat = displayCats.find(c => c.label === hoveredLabel) ?? displayCats[0] ?? navCategories[0];
@@ -809,8 +613,7 @@ function ShopDropdown({ onNavigate }: { onNavigate: (cat: string, slug?: string)
               className="flex w-full items-center px-5 py-3 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               data-testid={`nav-sub-${sub.label.toLowerCase().replace(/\s+/g, '-')}`}
             >
-              <span className="truncate">{sub.label}</span>
-              {sub.subtitle && <span className="ml-auto text-[10px] text-muted-foreground/70">{sub.subtitle}</span>}
+              {sub.label}
             </button>
           ))
         ) : (
@@ -828,10 +631,9 @@ function ShopDropdown({ onNavigate }: { onNavigate: (cat: string, slug?: string)
 
 // ─── Shared Header ─────────────────────────────────────────────────────────────
 function Header({
-  itemCount, wishlistCount, onCartOpen, user, onAuthOpen, onLogout, menuOpen, setMenuOpen, logoUrl,
+  itemCount, onCartOpen, user, onAuthOpen, onLogout, menuOpen, setMenuOpen, logoUrl,
 }: {
   itemCount: number;
-  wishlistCount: number;
   onCartOpen: () => void;
   user: AuthUser | null;
   onAuthOpen: () => void;
@@ -857,12 +659,6 @@ function Header({
   }, []);
 
   const settings = useSiteSettings();
-  const [headerCatalog, setHeaderCatalog] = useState<Product[]>([]);
-  useEffect(() => {
-    fetch(`${API}/products`).then(r => r.ok ? r.json() : []).then(value => {
-      if (Array.isArray(value)) setHeaderCatalog(value as Product[]);
-    }).catch(() => {});
-  }, []);
   const handleNavCategory = (cat: string, slug?: string) => {
     setShopOpen(false);
     setMenuOpen(false);
@@ -947,27 +743,13 @@ function Header({
                       try {
                         const stored = settings.categories_master ? JSON.parse(settings.categories_master) : null;
                         if (Array.isArray(stored) && stored.length) {
-                          return (stored as MasterCategory[]).filter(dc => dc.inMenu !== false).map(dc => {
+                          return (stored as MasterCategory[]).filter(dc => dc.inMenu).map(dc => {
                             const found = navCategories.find(nc => nc.label.toLowerCase() === dc.label.toLowerCase());
-                              const productSubs: NavSubItem[] = headerCatalog
-                                .filter(product => product.category.toLowerCase() === dc.label.toLowerCase())
-                                .map(product => ({
-                                  label: product.name, slug: product.id, subtitle: product.unit,
-                                  category: dc.label as Exclude<Category, 'All'>,
-                                }));
-                              return { label: dc.label, subs: productSubs.length ? productSubs : (found?.subs ?? []) };
+                            return found ?? { label: dc.label, subs: [] };
                           });
                         }
                       } catch { /* fall through */ }
-                      return navCategories.map(category => {
-                        const productSubs = headerCatalog
-                          .filter(product => product.category.toLowerCase() === category.label.toLowerCase())
-                          .map(product => ({
-                            label: product.name, slug: product.id, subtitle: product.unit,
-                            category: category.label as Exclude<Category, 'All'>,
-                          }));
-                        return { ...category, subs: productSubs.length ? productSubs : category.subs };
-                      });
+                      return navCategories as MobileCat[];
                     })();
                     return mobileCats.map(cat => (
                       <div key={cat.label} className="mb-2">
@@ -1024,7 +806,6 @@ function Header({
                 </Link>
                 <Link href="/account?tab=wishlist" className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold hover:bg-muted" data-testid="link-my-wishlist">
                   <Heart className="size-4" /> Wishlist
-                  {wishlistCount > 0 && <span className="ml-auto rounded-full bg-secondary px-2 py-0.5 text-[10px] text-white">{wishlistCount}</span>}
                 </Link>
                 <div className="my-1 border-t border-border" />
                 <button
@@ -1132,7 +913,7 @@ function BenefitMarquee() {
 }
 
 // ─── Hero ─────────────────────────────────────────────────────────────────────
-const heroSlides: HeroSlide[] = [
+const heroSlides = [
   {
     id: 'mithai', eyebrow: 'Fresh from the counter · Since 1978',
     heading: 'A little', highlight: 'mithaas', ending: 'goes a long way.',
@@ -1154,15 +935,15 @@ const heroSlides: HeroSlide[] = [
     image: '/namkeen-bowl.jpg', badge: ['Tea-time', 'hero'],
     cta: 'Shop namkeen', secondary: 'Our story',
   },
-] ;
+] as const;
 
 function Hero({ onShop }: { onShop: () => void }) {
   const [activeSlide, setActiveSlide] = useState(0);
   const settings = useSiteSettings();
-  const slides: HeroSlide[] = (() => {
+  const slides: typeof heroSlides[number][] = (() => {
     try {
       const stored = settings.hero_slides ? JSON.parse(settings.hero_slides) : null;
-      if (Array.isArray(stored) && stored.length) return stored as HeroSlide[];
+      if (Array.isArray(stored) && stored.length) return stored as typeof heroSlides[number][];
     } catch { /* fall through */ }
     return [...heroSlides];
   })();
@@ -1171,7 +952,7 @@ function Hero({ onShop }: { onShop: () => void }) {
   useEffect(() => {
     const timer = window.setInterval(() => setActiveSlide(c => (c + 1) % slides.length), 6500);
     return () => window.clearInterval(timer);
-  }, [slides.length]);
+  }, []);
 
   const moveSlide = (dir: number) =>
     setActiveSlide(c => (c + dir + slides.length) % slides.length);
@@ -1223,7 +1004,7 @@ function Hero({ onShop }: { onShop: () => void }) {
       </div>
       <div className="relative z-10 mx-auto flex max-w-7xl items-center justify-between gap-5 px-5 pb-8 sm:px-8 sm:pb-10">
         <div className="flex items-center gap-2" aria-label="Slide indicator">
-          {slides.map((item, i) => (
+          {heroSlides.map((item, i) => (
             <button key={item.id} onClick={() => setActiveSlide(i)}
               className={`hero-dot ${activeSlide === i ? 'is-active' : ''}`}
               aria-label={`Slide ${i + 1}`} data-testid={`button-hero-slide-${i + 1}`} />
@@ -1231,7 +1012,7 @@ function Hero({ onShop }: { onShop: () => void }) {
         </div>
         <div className="flex items-center gap-2">
           <span className="mr-2 font-mono-ui text-[10px] tracking-[.2em] text-primary-foreground/60">
-             {String((activeSlide % slides.length) + 1).padStart(2, '0')} / {String(slides.length).padStart(2, '0')}
+            {String(activeSlide + 1).padStart(2, '0')} / {String(heroSlides.length).padStart(2, '0')}
           </span>
           <button onClick={() => moveSlide(-1)} className="grid size-9 place-items-center rounded-full border border-primary-foreground/25 transition-colors hover:border-accent hover:text-accent" aria-label="Previous slide" data-testid="button-hero-previous">
             <ChevronLeft className="size-4" />
@@ -1275,10 +1056,9 @@ function CategoryRail() {
     try {
       const stored = settings.categories_master ? JSON.parse(settings.categories_master) : null;
       if (Array.isArray(stored) && stored.length) {
-        const visible = (stored as MasterCategory[]).filter(c => c.inCraving !== false).map(c => ({
+        return (stored as MasterCategory[]).filter(c => c.inCraving).map(c => ({
           label: c.label, note: c.note, image: c.image, icon: ICON_MAP[c.label] ?? Sparkles,
         }));
-        return visible.length ? visible : DEFAULT_CRAVING_CATEGORIES;
       }
     } catch { /* fall through */ }
     return DEFAULT_CRAVING_CATEGORIES;
@@ -1434,19 +1214,14 @@ function ShopSection({
   shagunProductId?: string | null;
   onSetShagun?: (id: string | null) => void;
 }) {
-  const settings = useSiteSettings();
-  const [category, setCategory] = useState<string>('All');
+  const [category, setCategory] = useState<Category>('All');
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState('featured');
   const [, navigate] = useLocation();
-  const categoryOptions = useMemo(
-    () => ['All', ...getConfiguredCategories(settings).map(item => item.label)],
-    [settings.categories_master],
-  );
 
   const filtered = useMemo(() =>
     items
-      .filter(p => (category === 'All' || p.category.toLowerCase() === category.toLowerCase()) && p.name.toLowerCase().includes(query.toLowerCase()))
+      .filter(p => (category === 'All' || p.category === category) && p.name.toLowerCase().includes(query.toLowerCase()))
       .sort((a, b) => sort === 'low' ? lowestPrice(a) - lowestPrice(b) : sort === 'high' ? lowestPrice(b) - lowestPrice(a) : 0),
     [items, category, query, sort]
   );
@@ -1472,7 +1247,7 @@ function ShopSection({
         </div>
         <div className="mt-9 flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4">
           <div className="flex gap-1 overflow-auto">
-            {categoryOptions.map(cat => (
+            {(['All', 'Mithai', 'Namkeen', 'Snacks', 'Gifting'] as Category[]).map(cat => (
               <button key={cat} onClick={() => setCategory(cat)}
                 className={`rounded-full px-4 py-2 text-xs font-bold transition-colors ${category === cat ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
                 data-testid={`button-filter-${cat.toLowerCase()}`}>{cat}</button>
@@ -1580,42 +1355,34 @@ function ShopPage({
   onDetail: (p: Product) => void;
   onAdd: (p: Product, variant?: ProductVariant) => void;
 }) {
-  const settings = useSiteSettings();
-  const configuredCategories = useMemo(
-    () => getConfiguredCategories(settings),
-    [settings.categories_master],
-  );
-  const categoryOptions = useMemo(
-    () => ['All', ...configuredCategories.map(category => category.label)],
-    [configuredCategories],
-  );
   const params = useParams<{ category?: string }>();
   const rawCat = params.category;
-  const initialCategory = resolveConfiguredCategory(rawCat, configuredCategories);
+  const initialCategory: Category = rawCat
+    ? ((rawCat.charAt(0).toUpperCase() + rawCat.slice(1)) as Category)
+    : 'All';
 
-  const [category, setCategory] = useState<string>(initialCategory);
+  const [category, setCategory] = useState<Category>(initialCategory);
   const [subSlug, setSubSlug] = useState(() => new URLSearchParams(window.location.search).get('sub') ?? '');
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState('featured');
-  const [, navigate] = useLocation();
 
   // Sync when URL params change
   useEffect(() => {
-    const cat = resolveConfiguredCategory(rawCat, configuredCategories);
+    const cat = rawCat
+      ? ((rawCat.charAt(0).toUpperCase() + rawCat.slice(1)) as Category)
+      : 'All';
     setCategory(cat);
     setSubSlug(new URLSearchParams(window.location.search).get('sub') ?? '');
     setQuery('');
-  }, [rawCat, settings.categories_master]);
+  }, [rawCat, window.location.search]);
 
   const activeSubItem = subSlug ? allSubItems.find(s => s.slug === subSlug) : null;
-  const activeProduct = subSlug ? catalog.find(product => product.id === subSlug) : null;
-  const configuredCategory = configuredCategories.find(item => item.label.toLowerCase() === category.toLowerCase());
 
   const filtered = useMemo(() =>
     catalog
       .filter(p => {
-        const catMatch = category === 'All' || p.category.toLowerCase() === category.toLowerCase();
-        const subMatch = !subSlug || p.id === subSlug || (p.tags ?? []).includes(subSlug);
+        const catMatch = category === 'All' || p.category === category;
+        const subMatch = !subSlug || (p.tags ?? []).includes(subSlug);
         const queryMatch = p.name.toLowerCase().includes(query.toLowerCase());
         return catMatch && subMatch && queryMatch;
       })
@@ -1623,15 +1390,13 @@ function ShopPage({
     [catalog, category, subSlug, query, sort]
   );
 
-  const categoryImage = configuredCategory?.image || CATEGORY_IMAGES[category as Category] || CATEGORY_IMAGES['Default']!;
-  const heroTitle = activeProduct?.name ?? activeSubItem?.label ?? (category === 'All' ? 'All Products' : configuredCategory?.label ?? category);
-  const heroSubtitle = activeProduct
-    ? `${activeProduct.unit} · from ${money(lowestPrice(activeProduct))}`
-    : activeSubItem
+  const categoryImage = CATEGORY_IMAGES[category] ?? CATEGORY_IMAGES['Default']!;
+  const heroTitle = activeSubItem ? activeSubItem.label : (category === 'All' ? 'All Products' : category);
+  const heroSubtitle = activeSubItem
     ? activeSubItem.subtitle
     : (category === 'All'
         ? 'Browse our full counter — sweets, namkeen, snacks, and gift boxes.'
-        : configuredCategory?.note || DEFAULT_CRAVING_CATEGORIES.find(c => c.label === category)?.note || `Browse all ${category} products.`);
+        : (DEFAULT_CRAVING_CATEGORIES.find(c => c.label === category)?.note ?? ''));
 
   return (
     <div className="min-h-screen">
@@ -1646,17 +1411,14 @@ function ShopPage({
         {/* Filters */}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-wrap gap-1">
-            {categoryOptions.map(cat => (
-              <button key={cat} onClick={() => {
-                setCategory(cat); setSubSlug('');
-                navigate(cat === 'All' ? '/shop' : `/shop/${categoryRouteSegment(cat)}`);
-              }}
+            {(['All', 'Mithai', 'Namkeen', 'Snacks', 'Gifting'] as Category[]).map(cat => (
+              <button key={cat} onClick={() => { setCategory(cat); setSubSlug(''); }}
                 className={`rounded-full px-4 py-2 text-xs font-bold transition-colors ${category === cat && !subSlug ? 'bg-primary text-primary-foreground' : 'hover:bg-muted border border-border'}`}
                 data-testid={`shoppage-filter-${cat.toLowerCase()}`}>{cat}</button>
             ))}
-            {(activeSubItem || activeProduct) && (
+            {activeSubItem && (
               <span className="flex items-center gap-1.5 rounded-full bg-secondary px-4 py-2 text-xs font-bold text-secondary-foreground">
-                {activeProduct?.name ?? activeSubItem?.label}
+                {activeSubItem.label}
                 <button onClick={() => setSubSlug('')} className="ml-1 opacity-70 hover:opacity-100" aria-label="Clear subcategory">×</button>
               </span>
             )}
@@ -1920,7 +1682,6 @@ function Footer({ logoUrl }: { logoUrl?: string }) {
 // ─── Product Drawer ───────────────────────────────────────────────────────────
 function ProductDrawer({ product, onClose, onAdd }: { product: Product; onClose: () => void; onAdd: (p: Product, v?: ProductVariant) => void }) {
   const [variant, setVariant] = useState<ProductVariant>(defaultVariant(product));
-  const settings = useSiteSettings();
   const materials = Array.from(new Set(product.variants.map(v => v.material)));
   const weights = product.variants.filter(v => v.material === variant.material);
   const chooseMaterial = (m: string) => setVariant(product.variants.find(v => v.material === m) || defaultVariant(product));
@@ -1936,9 +1697,6 @@ function ProductDrawer({ product, onClose, onAdd }: { product: Product; onClose:
         <div className="p-6 sm:p-8">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <Link href={`/shop/${product.category.toLowerCase()}`} onClick={onClose} className="font-mono-ui text-[10px] uppercase tracking-[.25em] text-secondary hover:underline">
-                {getConfiguredCategoryLabel(product.category, settings)}
-              </Link>
               <p className="font-display text-3xl font-semibold">{product.name}</p>
               <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
                 <span className="text-accent-foreground">★ {product.rating}</span> · {product.reviews} reviews
@@ -2104,9 +1862,9 @@ function CartDrawer({ cart, subtotal, updateQty, onClose, onCheckout, user, onAu
 }
 
 // ─── Checkout ─────────────────────────────────────────────────────────────────
-function Checkout({ subtotal, cart, onClose, onDone, onOrderCreated, onAuthenticationRequired, user }: {
+function Checkout({ subtotal, cart, onClose, onDone, onOrderCreated, user }: {
   subtotal: number; cart: CartLine[]; onClose: () => void; onDone: (order: OrderRecord) => void;
-  onOrderCreated: (order: OrderRecord) => void; onAuthenticationRequired: () => void; user: AuthUser | null;
+  onOrderCreated: (order: OrderRecord) => void; user: AuthUser | null;
 }) {
   const [submitted, setSubmitted] = useState(false);
   const [orderId] = useState(() => `AGS-${Math.floor(1000 + Math.random() * 8999)}`);
@@ -2120,7 +1878,6 @@ function Checkout({ subtotal, cart, onClose, onDone, onOrderCreated, onAuthentic
     setSubmitting(true);
     setSubmitError('');
     const form = e.currentTarget;
-    const customerName = (form.querySelector('#customer-name') as HTMLInputElement)?.value ?? '';
     const address = (form.querySelector('#customer-address') as HTMLTextAreaElement)?.value ?? '';
     const phone = (form.querySelector('#customer-phone') as HTMLInputElement)?.value ?? '';
     const order: OrderRecord = {
@@ -2131,17 +1888,14 @@ function Checkout({ subtotal, cart, onClose, onDone, onOrderCreated, onAuthentic
       status: 'Confirmed',
       address,
       phone,
-      customerName,
       customerEmail: user?.role === 'customer' ? user.email : undefined,
     };
-    const result = await apiSaveOrderToDb(order);
-    if (!result.order) {
-      setSubmitError(result.message);
+    const savedOrder = await apiSaveOrderToDb(order);
+    if (!savedOrder) {
+      setSubmitError('We could not save your order. Please check your connection and try again.');
       setSubmitting(false);
-      if (result.error === 'authentication') onAuthenticationRequired();
       return;
     }
-    const savedOrder = result.order;
     onOrderCreated(savedOrder);
     setOrderRef(savedOrder);
     setSubmitted(true);
@@ -2300,77 +2054,21 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
   const [coupons, setCoupons] = useState<CouponCode[]>([]);
   const [adminReviews, setAdminReviews] = useState<ProductReview[]>([]);
   const [adminSettings, setAdminSettings] = useState<Record<string, string>>({});
-  const [newOrderCount, setNewOrderCount] = useState(0);
-  const [soundEnabled, setSoundEnabled] = useState(true);
-  const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [orderAlert, setOrderAlert] = useState<{ orders: OrderRecord[] } | null>(null);
-  const previousOrderIds = useRef<Set<string> | null>(null);
-  const soundEnabledRef = useRef(true);
-
-  useEffect(() => {
-    soundEnabledRef.current = soundEnabled;
-  }, [soundEnabled]);
-
-  const playOrderAlert = () => {
-    if (!soundEnabledRef.current) return;
-    try {
-      const context = new AudioContext();
-      const soundBuzz = () => {
-        [0, 0.32, 0.64].forEach(offset => {
-          const start = context.currentTime + offset;
-          const oscillator = context.createOscillator();
-          const gain = context.createGain();
-          oscillator.type = 'square';
-          oscillator.frequency.setValueAtTime(520, start);
-          oscillator.frequency.linearRampToValueAtTime(680, start + 0.2);
-          gain.gain.setValueAtTime(0.0001, start);
-          gain.gain.exponentialRampToValueAtTime(0.34, start + 0.015);
-          gain.gain.setValueAtTime(0.34, start + 0.16);
-          gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.23);
-          oscillator.connect(gain);
-          gain.connect(context.destination);
-          oscillator.start(start);
-          oscillator.stop(start + 0.24);
-        });
-        window.setTimeout(() => void context.close(), 1200);
-      };
-      if (context.state === 'suspended') void context.resume().then(soundBuzz);
-      else soundBuzz();
-    } catch { /* notification sound can be blocked until the first click */ }
-  };
 
   const fetchAll = async () => {
     setDataLoading(true);
     try {
       const [p, o, c, b, coupList, s, revList] = await Promise.all([
         fetch(`${API}/products`).then(r => r.json()),
-        fetch(`${API}/orders`, { cache: 'no-store' }).then(r => r.json()),
-        fetch(`${API}/customers`, { cache: 'no-store' }).then(r => r.json()),
+        fetch(`${API}/orders`).then(r => r.json()),
+        fetch(`${API}/customers`).then(r => r.json()),
         fetch(`${API}/blog`).then(r => r.json()),
         fetch(`${API}/coupons`).then(r => r.json()),
         fetch(`${API}/settings`).then(r => r.json()),
         fetch(`${API}/reviews/admin/all`).then(r => r.json()),
       ]);
       setCatalog(Array.isArray(p) ? p : []);
-      const nextOrders = Array.isArray(o) ? o.map(normalizeOrder).filter((order): order is OrderRecord => Boolean(order)) : [];
-      const nextIds = new Set(nextOrders.map(order => order.id));
-      if (previousOrderIds.current) {
-        const added = nextOrders.filter(order => !previousOrderIds.current?.has(order.id));
-        if (added.length) {
-          setNewOrderCount(count => count + added.length);
-          setOrderAlert(current => {
-            const combined = [...(current?.orders ?? []), ...added];
-            const uniqueOrders = [...new Map(combined.map(order => [order.id, order])).values()];
-            return { orders: uniqueOrders };
-          });
-          playOrderAlert();
-          if ('Notification' in window && Notification.permission === 'granted') {
-            new Notification(`${added.length} new order${added.length === 1 ? '' : 's'}`, { body: added.map(order => order.id).join(', ') });
-          }
-        }
-      }
-      previousOrderIds.current = nextIds;
-      setOrders(nextOrders);
+      setOrders(Array.isArray(o) ? o : []);
       setCustomers(Array.isArray(c) ? c : []);
       setBlogPosts(
         Array.isArray(b)
@@ -2421,18 +2119,11 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
   };
 
   // Order status
-  const updateOrderStatus = async (id: string, status: OrderStatus, deliveryDetails?: DeliveryDetails) => {
-    const response = await fetch(`${API}/orders/${id}/status`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status, ...deliveryDetails }),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error ?? 'Could not update order status');
-    const updated = data as OrderRecord;
-    setOrders(prev => prev.map(o => o.id === id ? updated : o));
+  const updateOrderStatus = async (id: string, status: OrderStatus) => {
+    const response = await fetch(`${API}/orders/${id}/status`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
+    if (!response.ok) return;
+    setOrders(prev => prev.map(o => o.id === id ? { ...o, status } : o));
     window.dispatchEvent(new Event('aggarwal-order-updated'));
-    return updated;
   };
 
   const navItems: { key: AdminSection; icon: typeof LayoutDashboard; label: string }[] = [
@@ -2452,41 +2143,6 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
   return (
     <SiteSettingsContext.Provider value={adminSettings}>
     <div className="flex min-h-[100dvh]">
-      {orderAlert && (
-        <div className="fixed inset-0 z-[100] grid place-items-center bg-primary/65 p-5 backdrop-blur-sm" role="alertdialog" aria-modal="true" aria-labelledby="new-order-alert-title">
-          <div className="w-full max-w-md rounded-3xl border-2 border-red-400 bg-background p-7 text-center shadow-2xl">
-            <div className="mx-auto grid size-16 place-items-center rounded-full bg-red-100 text-red-600">
-              <BellRing className="size-8 animate-pulse" />
-            </div>
-            <p className="mt-4 font-mono-ui text-[10px] font-bold uppercase tracking-[.25em] text-red-600">Immediate attention</p>
-            <h2 id="new-order-alert-title" className="mt-2 font-display text-3xl font-semibold">
-              {orderAlert.orders.length === 1 ? 'New order received!' : `${orderAlert.orders.length} new orders received!`}
-            </h2>
-            <div className="mt-5 rounded-2xl bg-muted p-4 text-left">
-              {orderAlert.orders.slice(0, 4).map(order => (
-                <div key={order.id} className="flex items-center justify-between gap-4 border-b border-border py-2.5 last:border-0">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-bold">{order.id}</p>
-                    <p className="truncate text-xs text-muted-foreground">{order.customerName || order.phone}</p>
-                  </div>
-                  <p className="shrink-0 text-sm font-bold">{money(order.subtotal)}</p>
-                </div>
-              ))}
-              {orderAlert.orders.length > 4 && <p className="pt-3 text-center text-xs text-muted-foreground">+{orderAlert.orders.length - 4} more orders</p>}
-            </div>
-            <button
-              type="button"
-              autoFocus
-              onClick={() => { setOrderAlert(null); setNewOrderCount(0); }}
-              className="mt-6 w-full rounded-full bg-red-600 py-3.5 text-sm font-bold text-white hover:bg-red-700"
-              data-testid="button-acknowledge-new-order"
-            >
-              OK
-            </button>
-            <p className="mt-3 text-xs text-muted-foreground">This alert stays open until acknowledged.</p>
-          </div>
-        </div>
-      )}
       {/* Desktop Sidebar */}
       <aside className="hidden w-60 flex-col border-r border-primary-foreground/10 bg-primary lg:flex">
         <div className="flex items-center gap-3 border-b border-primary-foreground/10 px-6 py-5">
@@ -2525,22 +2181,7 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
               <p className="hidden text-xs text-primary-foreground/45 sm:block">Welcome back, {adminUser.name ?? adminUser.email}</p>
             </div>
           </div>
-          <div className="relative flex items-center gap-2">
-            <button
-              onClick={() => {
-                setNotificationsOpen(value => !value);
-                setNewOrderCount(0);
-                if ('Notification' in window && Notification.permission === 'default') void Notification.requestPermission();
-              }}
-              title="Order notifications"
-              className={`relative grid size-9 place-items-center rounded-full border text-primary-foreground transition-colors ${newOrderCount ? 'animate-pulse border-red-400 bg-red-500/20 text-red-200' : 'border-primary-foreground/20 hover:bg-primary-foreground/10'}`}
-            >
-              {newOrderCount ? <BellRing className="size-4" /> : <Bell className="size-4" />}
-              {newOrderCount > 0 && <span className="absolute -right-1 -top-1 grid min-w-4 place-items-center rounded-full bg-red-500 px-1 text-[9px] font-bold text-white">{newOrderCount > 99 ? '99+' : newOrderCount}</span>}
-            </button>
-            <button onClick={() => setSoundEnabled(value => !value)} title={soundEnabled ? 'Mute order sound' : 'Enable order sound'} className="grid size-9 place-items-center rounded-full border border-primary-foreground/20 text-primary-foreground/70 hover:bg-primary-foreground/10">
-              {soundEnabled ? <Volume2 className="size-4" /> : <VolumeX className="size-4" />}
-            </button>
+          <div className="flex items-center gap-2">
             <button onClick={refreshAll} title="Refresh data" className="grid size-9 place-items-center rounded-full border border-primary-foreground/20 text-primary-foreground/60 hover:bg-primary-foreground/10 hover:text-primary-foreground">
               <RefreshCw className="size-4" />
             </button>
@@ -2548,24 +2189,6 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
               <div className="size-2 rounded-full bg-accent" />
               <span className="font-mono-ui text-[10px] font-bold uppercase tracking-wider text-accent">Admin</span>
             </div>
-            {notificationsOpen && (
-              <div className="absolute right-0 top-12 z-50 w-80 rounded-2xl border border-border bg-background p-3 text-foreground shadow-2xl">
-                <div className="flex items-center justify-between border-b border-border px-2 pb-2">
-                  <p className="text-sm font-bold">Order notifications</p>
-                  <span className="text-[10px] text-muted-foreground">{orders.filter(order => order.status !== 'Delivered').length} active</span>
-                </div>
-                <div className="max-h-64 overflow-y-auto">
-                  {orders.slice(0, 6).map(order => (
-                    <button key={order.id} onClick={() => { setNotificationsOpen(false); setSection('orders'); }} className="flex w-full items-start gap-3 rounded-xl px-2 py-3 text-left hover:bg-muted">
-                      <CircleDot className={`mt-1 size-3.5 shrink-0 ${order.status === 'Delivered' ? 'text-emerald-500' : 'text-red-500'}`} />
-                      <span className="min-w-0 flex-1"><b className="block truncate text-xs">{order.id}</b><span className="block text-[11px] text-muted-foreground">{order.customerName || order.phone} · {money(order.subtotal)}</span></span>
-                      <span className="text-[10px] text-muted-foreground">{order.status}</span>
-                    </button>
-                  ))}
-                  {orders.length === 0 && <p className="px-2 py-6 text-center text-xs text-muted-foreground">No orders yet.</p>}
-                </div>
-              </div>
-            )}
           </div>
         </header>
 
@@ -2963,184 +2586,21 @@ function AdminSectionProducts({ catalog, loading, onAdd, onEdit, onDelete }: {
 // ─── Admin · Orders ───────────────────────────────────────────────────────────
 function AdminSectionOrders({ orders, loading, onStatusChange }: {
   orders: OrderRecord[]; loading: boolean;
-  onStatusChange: (id: string, status: OrderStatus, deliveryDetails?: DeliveryDetails) => Promise<OrderRecord>;
+  onStatusChange: (id: string, status: OrderStatus) => Promise<void>;
 }) {
   const [filter, setFilter] = useState<OrderStatus | 'All'>('All');
   const [search, setSearch] = useState('');
-  const [reportPreset, setReportPreset] = useState<'today' | 'week' | 'month' | 'quarter' | 'year' | 'custom'>('today');
-  const [fromDate, setFromDate] = useState(new Date().toISOString().slice(0, 10));
-  const [toDate, setToDate] = useState(new Date().toISOString().slice(0, 10));
-  const [reportCategory, setReportCategory] = useState('All');
-  const [reportStatus, setReportStatus] = useState<OrderStatus | 'All'>('All');
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [deliveryOrder, setDeliveryOrder] = useState<OrderRecord | null>(null);
-  const [deliveryDetails, setDeliveryDetails] = useState<DeliveryDetails>({
-    receiverName: '',
-    deliveryRemarks: '',
-    deliveryContact: '',
-  });
-  const [deliveryError, setDeliveryError] = useState('');
-  const [savingDelivery, setSavingDelivery] = useState(false);
 
-  const getPresetRange = (preset: typeof reportPreset) => {
-    const end = new Date();
-    const start = new Date(end);
-    if (preset === 'today') start.setHours(0, 0, 0, 0);
-    if (preset === 'week') start.setDate(end.getDate() - 6);
-    if (preset === 'month') start.setDate(end.getDate() - 29);
-    if (preset === 'quarter') start.setDate(end.getDate() - 89);
-    if (preset === 'year') start.setDate(end.getDate() - 364);
-    return { from: start.toISOString().slice(0, 10), to: end.toISOString().slice(0, 10) };
-  };
-  const applyPreset = (preset: typeof reportPreset) => {
-    setReportPreset(preset);
-    if (preset !== 'custom') {
-      const range = getPresetRange(preset);
-      setFromDate(range.from); setToDate(range.to);
-    }
-  };
-  const reportCategories = Array.from(new Set(orders.flatMap(order => order.items.map(line => line.product?.category).filter(Boolean) as string[]))).sort();
-  const orderDay = (date: string) => {
-    const parsed = new Date(date);
-    return Number.isNaN(parsed.getTime()) ? date.slice(0, 10) : parsed.toISOString().slice(0, 10);
-  };
-  const reportOrders = orders.filter(order => {
-    const day = orderDay(order.date);
-    const categoryMatches = reportCategory === 'All' || order.items.some(line => line.product?.category === reportCategory);
-    return day >= fromDate && day <= toDate && (reportStatus === 'All' || order.status === reportStatus) && categoryMatches;
-  });
-  const categoryReport = reportCategories.map(category => ({
-    category,
-    orders: reportOrders.filter(order => order.items.some(line => line.product?.category === category)).length,
-    revenue: reportOrders.reduce((sum, order) => sum + order.items.filter(line => line.product?.category === category).reduce((lineSum, line) => lineSum + (line.variant?.price ?? 0) * line.quantity, 0), 0),
-  }));
-  const statusReport = (['Confirmed', 'Packing', 'Out for delivery', 'Delivered'] as OrderStatus[]).map(status => ({
-    status, count: reportOrders.filter(order => order.status === status).length,
-  }));
-  const reportRevenue = reportOrders.reduce((sum, order) => sum + order.subtotal, 0);
-  const reportItems = reportOrders.reduce((sum, order) => sum + order.items.reduce((lineSum, line) => lineSum + line.quantity, 0), 0);
-
-  const reportRows = reportOrders.flatMap(order => order.items.map(line => ({
-    orderId: order.id, date: order.date, status: order.status, customer: order.customerName ?? '',
-    email: order.customerEmail ?? '', phone: order.phone, address: order.address,
-    category: line.product?.category ?? '', product: line.product?.name ?? 'Order item',
-    variant: line.variant ? variantLabel(line.variant) : 'Standard', quantity: line.quantity,
-    unitPrice: line.variant?.price ?? 0, lineTotal: (line.variant?.price ?? 0) * line.quantity,
-  })));
-  const downloadReport = (kind: 'excel' | 'pdf') => {
-    const title = `Aggarwal Sweets order report (${fromDate} to ${toDate})`;
-    const headers = ['Order ID', 'Date', 'Status', 'Customer', 'Email', 'Phone', 'Address', 'Category', 'Product', 'Variant', 'Qty', 'Unit price', 'Line total'];
-    const escapeHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] ?? char));
-    const table = reportRows.map(row => headers.map((_, index) => [
-      row.orderId, row.date, row.status, row.customer, row.email, row.phone, row.address, row.category,
-      row.product, row.variant, row.quantity, row.unitPrice, row.lineTotal,
-    ][index]).map(escapeHtml));
-    const summary = `<h1>${escapeHtml(title)}</h1><p>Orders: ${reportOrders.length} · Revenue: ${escapeHtml(money(reportRevenue))} · Items: ${reportItems}</p><p>Filters: status ${escapeHtml(reportStatus)}, category ${escapeHtml(reportCategory)}</p>`;
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>body{font:12px Arial;color:#222;padding:24px}h1{font-size:20px}table{border-collapse:collapse;width:100%;font-size:10px}th,td{border:1px solid #bbb;padding:5px;text-align:left}th{background:#eee}p{margin:6px 0 14px}</style></head><body>${summary}<table><thead><tr>${headers.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead><tbody>${table.map(row => `<tr>${row.map(cell => `<td>${cell}</td>`).join('')}</tr>`).join('')}</tbody></table></body></html>`;
-    if (kind === 'excel') {
-      const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a'); anchor.href = url; anchor.download = `orders-${fromDate}-to-${toDate}.xls`; anchor.click();
-      URL.revokeObjectURL(url);
-      return;
-    }
-    const printWindow = window.open('', '_blank', 'noopener,noreferrer');
-    if (!printWindow) { window.alert('Please allow pop-ups to download the PDF report.'); return; }
-    printWindow.document.write(html.replace('</body>', '<script>window.onload=function(){window.print();}</script></body>'));
-    printWindow.document.close();
-  };
-
-  const updateStatus = (order: OrderRecord, status: OrderStatus) => {
-    if (status === 'Delivered' && order.status !== 'Delivered') {
-      setDeliveryOrder(order);
-      setDeliveryDetails({
-        receiverName: order.receiverName ?? '',
-        deliveryRemarks: order.deliveryRemarks ?? '',
-        deliveryContact: order.deliveryContact ?? order.phone ?? '',
-      });
-      setDeliveryError('');
-      return;
-    }
-    void onStatusChange(order.id, status).catch(error => {
-      window.alert(error instanceof Error ? error.message : 'Could not update order status');
-    });
-  };
-
-  const completeDelivery = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!deliveryOrder || savingDelivery) return;
-    setSavingDelivery(true);
-    setDeliveryError('');
-    try {
-      await onStatusChange(deliveryOrder.id, 'Delivered', deliveryDetails);
-      setDeliveryOrder(null);
-    } catch (error) {
-      setDeliveryError(error instanceof Error ? error.message : 'Could not complete delivery');
-    } finally {
-      setSavingDelivery(false);
-    }
-  };
+  const updateStatus = (id: string, status: OrderStatus) => { onStatusChange(id, status); };
 
   const filtered = orders.filter(o =>
     (filter === 'All' || o.status === filter) &&
-    (search === '' ||
-      o.id.toLowerCase().includes(search.toLowerCase()) ||
-      o.address.toLowerCase().includes(search.toLowerCase()) ||
-      o.phone.includes(search) ||
-      o.customerName?.toLowerCase().includes(search.toLowerCase()) ||
-      o.customerEmail?.toLowerCase().includes(search.toLowerCase()))
+    (search === '' || o.id.toLowerCase().includes(search.toLowerCase()) || o.address.toLowerCase().includes(search.toLowerCase()) || o.phone.includes(search))
   );
 
   return (
     <div className="space-y-5">
-      <div className="rounded-2xl border border-border bg-background p-5 shadow-sm">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h3 className="flex items-center gap-2 font-semibold"><BarChart3 className="size-4 text-secondary" /> Order reports</h3>
-            <p className="mt-1 text-xs text-muted-foreground">Detailed order and line-item exports with date, status, and category filters.</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button onClick={() => downloadReport('excel')} className="flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-bold hover:bg-muted"><FileSpreadsheet className="size-3.5 text-emerald-600" /> Excel</button>
-            <button onClick={() => downloadReport('pdf')} className="flex items-center gap-2 rounded-xl bg-primary px-3 py-2 text-xs font-bold text-primary-foreground hover:opacity-90"><Printer className="size-3.5" /> PDF / print</button>
-          </div>
-        </div>
-        <div className="mt-4 flex flex-wrap gap-2">
-          {([
-            ['today', 'Today'], ['week', 'Last week'], ['month', 'Last month'],
-            ['quarter', 'Last quarter'], ['year', 'Last year'], ['custom', 'Custom range'],
-          ] as const).map(([value, label]) => (
-            <button key={value} onClick={() => applyPreset(value)} className={`rounded-full px-3 py-1.5 text-xs font-bold ${reportPreset === value ? 'bg-primary text-primary-foreground' : 'border border-border hover:bg-muted'}`}>{label}</button>
-          ))}
-        </div>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <label className="text-xs font-bold uppercase tracking-wider">From<input type="date" value={fromDate} onChange={e => { setFromDate(e.target.value); setReportPreset('custom'); }} className="mt-1 block w-full rounded-xl border border-input bg-background px-3 py-2 text-sm font-normal normal-case tracking-normal" /></label>
-          <label className="text-xs font-bold uppercase tracking-wider">To<input type="date" value={toDate} onChange={e => { setToDate(e.target.value); setReportPreset('custom'); }} className="mt-1 block w-full rounded-xl border border-input bg-background px-3 py-2 text-sm font-normal normal-case tracking-normal" /></label>
-          <label className="text-xs font-bold uppercase tracking-wider">Status<select value={reportStatus} onChange={e => setReportStatus(e.target.value as OrderStatus | 'All')} className="mt-1 block w-full rounded-xl border border-input bg-background px-3 py-2 text-sm font-normal normal-case tracking-normal"><option>All</option>{(['Confirmed', 'Packing', 'Out for delivery', 'Delivered'] as OrderStatus[]).map(status => <option key={status}>{status}</option>)}</select></label>
-          <label className="text-xs font-bold uppercase tracking-wider">Category<select value={reportCategory} onChange={e => setReportCategory(e.target.value)} className="mt-1 block w-full rounded-xl border border-input bg-background px-3 py-2 text-sm font-normal normal-case tracking-normal"><option>All</option>{reportCategories.map(category => <option key={category}>{category}</option>)}</select></label>
-        </div>
-        <div className="mt-4 grid gap-3 sm:grid-cols-3">
-          <div className="rounded-xl bg-muted/50 p-3"><p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Orders</p><p className="mt-1 text-xl font-bold">{reportOrders.length}</p></div>
-          <div className="rounded-xl bg-muted/50 p-3"><p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Revenue</p><p className="mt-1 text-xl font-bold">{money(reportRevenue)}</p></div>
-          <div className="rounded-xl bg-muted/50 p-3"><p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Items sold</p><p className="mt-1 text-xl font-bold">{reportItems}</p></div>
-        </div>
-        <div className="mt-5 grid gap-4 lg:grid-cols-3">
-          <div className="rounded-xl border border-border p-4">
-            <p className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-muted-foreground"><TrendingUp className="size-3.5" /> Revenue by category</p>
-            <div className="space-y-2">{categoryReport.length ? categoryReport.map(item => {
-              const max = Math.max(...categoryReport.map(value => value.revenue), 1);
-              return <div key={item.category}><div className="mb-1 flex justify-between text-xs"><span>{item.category}</span><b>{money(item.revenue)}</b></div><div className="h-2 rounded-full bg-muted"><div className="h-2 rounded-full bg-secondary" style={{ width: `${Math.max(3, (item.revenue / max) * 100)}%` }} /></div></div>;
-            }) : <p className="text-xs text-muted-foreground">No category data for this range.</p>}</div>
-          </div>
-          <div className="rounded-xl border border-border p-4">
-            <p className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-muted-foreground"><CircleDot className="size-3.5" /> Orders by status</p>
-            <div className="space-y-2">{statusReport.map(item => <div key={item.status} className="flex items-center gap-3 text-xs"><span className="w-28 truncate">{item.status}</span><div className="h-2 flex-1 rounded-full bg-muted"><div className="h-2 rounded-full bg-accent" style={{ width: `${reportOrders.length ? Math.max(item.count ? 5 : 0, (item.count / reportOrders.length) * 100) : 0}%` }} /></div><b>{item.count}</b></div>)}</div>
-          </div>
-          <div className="rounded-xl border border-border p-4">
-            <p className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-muted-foreground"><CalendarDays className="size-3.5" /> Range summary</p>
-            <div className="space-y-3 text-sm"><div className="flex justify-between"><span className="text-muted-foreground">Average order</span><b>{money(reportOrders.length ? reportRevenue / reportOrders.length : 0)}</b></div><div className="flex justify-between"><span className="text-muted-foreground">Top category</span><b>{categoryReport.slice().sort((a, b) => b.revenue - a.revenue)[0]?.category ?? '—'}</b></div><div className="flex justify-between"><span className="text-muted-foreground">Export rows</span><b>{reportRows.length}</b></div></div>
-          </div>
-        </div>
-      </div>
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2 rounded-xl border border-border bg-background px-4 py-2.5 shadow-sm">
           <Search className="size-4 text-muted-foreground" />
@@ -3178,7 +2638,7 @@ function AdminSectionOrders({ orders, loading, onStatusChange }: {
                   <p className="font-bold">{money(order.subtotal)}</p>
                   <select
                     value={order.status}
-                    onChange={e => updateStatus(order, e.target.value as OrderStatus)}
+                    onChange={e => updateStatus(order.id, e.target.value as OrderStatus)}
                     className="rounded-xl border border-border bg-background px-3 py-1.5 text-xs font-bold outline-none focus:ring-2 focus:ring-ring"
                     data-testid={`select-order-status-${order.id}`}
                   >
@@ -3191,124 +2651,28 @@ function AdminSectionOrders({ orders, loading, onStatusChange }: {
                 </div>
               </div>
               {expandedId === order.id && (
-                <div className="space-y-5 border-t border-border bg-muted/30 px-5 py-4">
-                  <div>
-                    <p className="mb-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">Customer details</p>
-                    <div className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
-                      <div><span className="block text-xs text-muted-foreground">Name</span><b>{order.customerName || 'Not provided'}</b></div>
-                      <div><span className="block text-xs text-muted-foreground">Email</span><b className="break-all">{order.customerEmail || 'Not provided'}</b></div>
-                      <div><span className="block text-xs text-muted-foreground">Phone</span><b>{order.phone}</b></div>
-                    </div>
-                  </div>
-                  <div>
-                    <p className="mb-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">Delivery address</p>
-                    <p className="text-sm">{order.address}</p>
-                  </div>
-                  {(order.receiverName || order.deliveryContact || order.deliveryRemarks) && (
-                    <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-950">
-                      <p className="mb-3 text-xs font-bold uppercase tracking-wider text-emerald-700">Delivery completion</p>
-                      <div className="grid gap-3 text-sm sm:grid-cols-2">
-                        <div><span className="block text-xs text-emerald-700">Received by</span><b>{order.receiverName || '—'}</b></div>
-                        <div><span className="block text-xs text-emerald-700">Receiver contact</span><b>{order.deliveryContact || '—'}</b></div>
-                        <div className="sm:col-span-2"><span className="block text-xs text-emerald-700">Remarks</span><p>{order.deliveryRemarks || '—'}</p></div>
-                      </div>
-                    </div>
-                  )}
-                  <div>
+                <div className="border-t border-border bg-muted/30 px-5 py-4">
+                  <p className="mb-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">Delivery address</p>
+                  <p className="text-sm">{order.address}</p>
                   <p className="mt-4 mb-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">Items</p>
                   <div className="space-y-2">
                     {order.items.map((line, i) => (
                       <div key={i} className="flex items-center justify-between rounded-xl border border-border bg-background px-4 py-2.5">
                         <div className="flex items-center gap-3">
-                          <img src={line.product?.image ?? '/hero-mithai.jpg'} className="size-9 rounded-lg object-cover" alt={line.product?.name ?? 'Order item'} />
+                          <img src={line.product.image} className="size-9 rounded-lg object-cover" alt={line.product.name} />
                           <div>
-                            <p className="text-sm font-semibold">{line.product?.name ?? 'Order item'}</p>
-                            <p className="text-xs text-muted-foreground">{line.variant ? variantLabel(line.variant) : 'Standard'} · qty {line.quantity}</p>
+                            <p className="text-sm font-semibold">{line.product.name}</p>
+                            <p className="text-xs text-muted-foreground">{variantLabel(line.variant)} · qty {line.quantity}</p>
                           </div>
                         </div>
-                        <p className="text-sm font-bold">{money((line.variant?.price ?? 0) * line.quantity)}</p>
+                        <p className="text-sm font-bold">{money(line.variant.price * line.quantity)}</p>
                       </div>
                     ))}
-                  </div>
                   </div>
                 </div>
               )}
             </div>
           ))}
-        </div>
-      )}
-
-      {deliveryOrder && (
-        <div className="fixed inset-0 z-[80] grid place-items-center overflow-y-auto bg-primary/55 p-4 backdrop-blur-sm" onMouseDown={() => !savingDelivery && setDeliveryOrder(null)}>
-          <form
-            onSubmit={completeDelivery}
-            onMouseDown={event => event.stopPropagation()}
-            className="w-full max-w-lg rounded-3xl bg-background p-5 shadow-2xl sm:p-7"
-            data-testid="form-complete-delivery"
-          >
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="font-display text-2xl">Complete delivery</p>
-                <p className="mt-1 text-xs text-muted-foreground">Order {deliveryOrder.id}</p>
-              </div>
-              <button type="button" disabled={savingDelivery} onClick={() => setDeliveryOrder(null)} className="grid size-9 place-items-center rounded-full hover:bg-muted" aria-label="Close delivery form">
-                <X className="size-4" />
-              </button>
-            </div>
-            <p className="mt-4 rounded-xl bg-muted p-3 text-xs leading-5 text-muted-foreground">
-              These details will be saved with the order and included in the delivery confirmation email sent to {deliveryOrder.customerEmail || 'the customer'}.
-            </p>
-            <div className="mt-5 space-y-4">
-              <div>
-                <label htmlFor="delivery-receiver-name" className="mb-2 block text-xs font-bold uppercase tracking-wider">Receiver name</label>
-                <input
-                  id="delivery-receiver-name"
-                  required
-                  maxLength={100}
-                  value={deliveryDetails.receiverName}
-                  onChange={event => setDeliveryDetails(current => ({ ...current, receiverName: event.target.value }))}
-                  className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-ring"
-                  placeholder="Name of the person who received the order"
-                  data-testid="input-delivery-receiver-name"
-                />
-              </div>
-              <div>
-                <label htmlFor="delivery-contact" className="mb-2 block text-xs font-bold uppercase tracking-wider">Receiver contact number</label>
-                <input
-                  id="delivery-contact"
-                  required
-                  type="tel"
-                  maxLength={30}
-                  value={deliveryDetails.deliveryContact}
-                  onChange={event => setDeliveryDetails(current => ({ ...current, deliveryContact: event.target.value }))}
-                  className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-ring"
-                  placeholder="Receiver phone number"
-                  data-testid="input-delivery-contact"
-                />
-              </div>
-              <div>
-                <label htmlFor="delivery-remarks" className="mb-2 block text-xs font-bold uppercase tracking-wider">Delivery remarks</label>
-                <textarea
-                  id="delivery-remarks"
-                  required
-                  rows={3}
-                  maxLength={1000}
-                  value={deliveryDetails.deliveryRemarks}
-                  onChange={event => setDeliveryDetails(current => ({ ...current, deliveryRemarks: event.target.value }))}
-                  className="w-full resize-none rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-ring"
-                  placeholder="For example: handed over at the front desk"
-                  data-testid="input-delivery-remarks"
-                />
-              </div>
-            </div>
-            {deliveryError && <p className="mt-4 text-sm font-semibold text-destructive">{deliveryError}</p>}
-            <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              <button type="button" disabled={savingDelivery} onClick={() => setDeliveryOrder(null)} className="rounded-full border border-border px-5 py-3 text-sm font-bold hover:bg-muted">Cancel</button>
-              <button type="submit" disabled={savingDelivery} className="flex items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-bold text-primary-foreground disabled:opacity-60" data-testid="button-confirm-delivery">
-                {savingDelivery ? <><Loader2 className="size-4 animate-spin" /> Saving…</> : <><PackageCheck className="size-4" /> Mark as delivered</>}
-              </button>
-            </div>
-          </form>
         </div>
       )}
     </div>
@@ -3320,9 +2684,7 @@ function AdminSectionCustomers({ customers }: { customers: CustomerRecord[] }) {
   const [search, setSearch] = useState('');
   const filtered = customers.filter(c =>
     c.email.toLowerCase().includes(search.toLowerCase()) ||
-    (c.name ?? '').toLowerCase().includes(search.toLowerCase()) ||
-    (c.phone ?? '').includes(search) ||
-    (c.address ?? '').toLowerCase().includes(search.toLowerCase())
+    (c.name ?? '').toLowerCase().includes(search.toLowerCase())
   );
   return (
     <div className="space-y-5">
@@ -3335,7 +2697,7 @@ function AdminSectionCustomers({ customers }: { customers: CustomerRecord[] }) {
           <table className="w-full">
             <thead>
               <tr className="border-b border-border bg-muted/40">
-                {['Customer', 'Email', 'Phone', 'Address', 'Orders', 'Spent', 'Last order', 'Joined'].map(h => (
+                {['Customer', 'Email', 'Joined'].map(h => (
                   <th key={h} className="whitespace-nowrap px-5 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-muted-foreground">{h}</th>
                 ))}
               </tr>
@@ -3352,11 +2714,6 @@ function AdminSectionCustomers({ customers }: { customers: CustomerRecord[] }) {
                     </div>
                   </td>
                   <td className="px-5 py-4 text-sm text-muted-foreground">{c.email}</td>
-                  <td className="px-5 py-4 text-sm text-muted-foreground whitespace-nowrap">{c.phone ?? '—'}</td>
-                  <td className="max-w-[220px] px-5 py-4 text-sm text-muted-foreground"><span className="line-clamp-2">{c.address ?? '—'}</span></td>
-                  <td className="px-5 py-4 text-sm font-semibold">{c.orderCount ?? 0}</td>
-                  <td className="px-5 py-4 text-sm font-semibold whitespace-nowrap">{money(c.totalSpent ?? 0)}</td>
-                  <td className="px-5 py-4 text-sm text-muted-foreground whitespace-nowrap">{c.lastOrderAt ? new Date(c.lastOrderAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}</td>
                   <td className="px-5 py-4 text-sm text-muted-foreground">
                     {c.joinedAt ? new Date(c.joinedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
                   </td>
@@ -3392,12 +2749,7 @@ function AdminSectionCategories({ onRefresh }: { onRefresh: () => void }) {
   useEffect(() => {
     try {
       const stored = settings.categories_master ? JSON.parse(settings.categories_master) : null;
-      const source = Array.isArray(stored) && stored.length ? stored : DEFAULT_MASTER_CATEGORIES;
-      setCats((source as MasterCategory[]).map(category => ({
-        ...category,
-        inMenu: category.inMenu !== false,
-        inCraving: category.inCraving !== false,
-      })));
+      setCats(Array.isArray(stored) && stored.length ? stored : DEFAULT_MASTER_CATEGORIES);
     } catch { setCats(DEFAULT_MASTER_CATEGORIES); }
   }, [settings.categories_master]);
 
@@ -3527,22 +2879,9 @@ function AdminSectionCategories({ onRefresh }: { onRefresh: () => void }) {
                   placeholder="e.g. Cool &amp; refreshing" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
               </div>
               <div>
-                <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Category image <span className="text-muted-foreground font-normal normal-case">(for craving card background)</span></label>
-                <div className="flex flex-col gap-2 sm:flex-row">
-                  <input value={form.image} onChange={e => setForm(f => ({ ...f, image: e.target.value }))}
-                    placeholder="/hero-mithai.jpg or https://…" className="min-w-0 flex-1 rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
-                  <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-input px-3 py-2.5 text-xs font-bold hover:bg-muted">
-                    <Upload className="size-3.5" /> Browse image
-                    <input type="file" accept="image/*" className="hidden" onChange={e => {
-                      const file = e.target.files?.[0];
-                      if (!file) return;
-                      const reader = new FileReader();
-                      reader.onloadend = () => setForm(current => ({ ...current, image: reader.result as string }));
-                      reader.readAsDataURL(file);
-                    }} />
-                  </label>
-                </div>
-                {form.image && <img src={form.image} alt="Category preview" className="mt-2 h-24 w-full rounded-xl border border-border object-cover" />}
+                <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Image URL <span className="text-muted-foreground font-normal normal-case">(for craving card background)</span></label>
+                <input value={form.image} onChange={e => setForm(f => ({ ...f, image: e.target.value }))}
+                  placeholder="/hero-mithai.jpg" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
               </div>
               <div className="flex gap-6 rounded-xl border border-border bg-muted/30 px-4 py-3">
                 {([
@@ -3606,7 +2945,7 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
   // Local editable states (saved only on button click)
   const [localCats, setLocalCats] = useState<CravingCat[]>([]);
   const [catsSaved, setCatsSaved] = useState(false);
-  const [localSlides, setLocalSlides] = useState<HeroSlide[]>([]);
+  const [localSlides, setLocalSlides] = useState<typeof heroSlides[number][]>([]);
   const [slidesSaved, setSlidesSaved] = useState(false);
   const [localUnits, setLocalUnits] = useState<string[]>([]);
   const [unitsSaved, setUnitsSaved] = useState(false);
@@ -3859,21 +3198,14 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
         </div>
       </div>
 
-       {/* Hero slider config */}
+      {/* Hero slider config */}
       <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
         <h3 className="font-semibold">Hero slider</h3>
-         <p className="mt-1 text-sm text-muted-foreground">Add as many homepage banner slides as you need. Each slide supports a URL or local image upload.</p>
+        <p className="mt-1 text-sm text-muted-foreground">Customise the homepage banner slides. Leave heading/highlight blank to use defaults.</p>
         <div className="mt-4 space-y-4">
           {localSlides.map((slide, idx) => (
             <div key={idx} className="rounded-xl border border-border p-4 space-y-3">
-               <div className="flex items-center justify-between gap-3">
-                 <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Slide {idx + 1}</p>
-                 <button type="button" onClick={() => setLocalSlides(ss => ss.filter((_, i) => i !== idx))}
-                   disabled={localSlides.length <= 1}
-                   className="flex items-center gap-1 rounded-lg border border-red-200 px-2.5 py-1.5 text-xs font-bold text-red-500 disabled:cursor-not-allowed disabled:opacity-40">
-                   <Trash2 className="size-3.5" /> Remove
-                 </button>
-               </div>
+              <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Slide {idx + 1}</p>
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
                   <label className="text-[10px] font-bold uppercase tracking-wider">Eyebrow</label>
@@ -3895,23 +3227,6 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
                   <label className="text-[10px] font-bold uppercase tracking-wider">Description</label>
                   <textarea rows={2} value={slide.description} onChange={e => setLocalSlides(ss => ss.map((s, i) => i === idx ? { ...s, description: e.target.value as never } : s))} className="mt-1 w-full resize-none rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
                 </div>
-                 <div className="sm:col-span-2">
-                   <label className="text-[10px] font-bold uppercase tracking-wider">Hero image</label>
-                   <div className="mt-1 flex flex-col gap-2 sm:flex-row">
-                     <input value={slide.image} onChange={e => setLocalSlides(ss => ss.map((s, i) => i === idx ? { ...s, image: e.target.value } : s))}
-                       placeholder="/hero-mithai.jpg or https://…" className="min-w-0 flex-1 rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
-                     <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-input px-3 py-2 text-xs font-bold hover:bg-muted">
-                       <Upload className="size-3.5" /> Browse image
-                       <input type="file" accept="image/*" className="hidden" onChange={e => {
-                         const file = e.target.files?.[0]; if (!file) return;
-                         const reader = new FileReader();
-                         reader.onloadend = () => setLocalSlides(ss => ss.map((s, i) => i === idx ? { ...s, image: reader.result as string } : s));
-                         reader.readAsDataURL(file);
-                       }} />
-                     </label>
-                   </div>
-                   {slide.image && <img src={slide.image} alt="" className="mt-2 h-24 w-full rounded-xl border border-border object-cover" />}
-                 </div>
                 <div className="sm:col-span-2">
                   <label className="text-[10px] font-bold uppercase tracking-wider">Red circle badge <span className="font-normal normal-case text-muted-foreground">(comma-separated lines, e.g. Small, batch, joy)</span></label>
                   <input
@@ -3936,14 +3251,6 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
               </div>
             </div>
           ))}
-           <button type="button" onClick={() => setLocalSlides(ss => [...ss, {
-             id: `custom-${Date.now()}`, eyebrow: 'Fresh from Aggarwal Sweets', heading: 'A little',
-             highlight: 'mithaas', ending: 'goes a long way.', description: 'Tell customers what makes this moment special.',
-             image: '/hero-mithai.jpg', badge: ['Made', 'fresh'], cta: 'Shop now', secondary: 'Find a gift',
-           }])}
-             className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border py-3 text-sm font-bold text-muted-foreground hover:bg-muted">
-             <Plus className="size-4" /> Add another slide
-           </button>
           <div className="flex items-center justify-end gap-3 pt-1">
             {slidesSaved && <span className="text-xs font-semibold text-green-600">✓ Saved!</span>}
             <button type="button" onClick={saveSlides}
@@ -4343,11 +3650,7 @@ function AdminPage() {
   const [user, setUser] = useState<AuthUser | null>(readUser);
   const isAdmin = user?.role === 'admin';
 
-  const handleLogout = async () => {
-    await apiLogout();
-    localStorage.removeItem('aggarwal-user');
-    setUser(null);
-  };
+  const handleLogout = () => { localStorage.removeItem('aggarwal-user'); setUser(null); };
 
   if (!isAdmin) return <AdminLoginScreen onLogin={setUser} />;
   return <AdminDashboard adminUser={user!} onLogout={handleLogout} />;
@@ -4400,7 +3703,7 @@ function AccountPage({ user, wishlist, orders, catalog, onAuthOpen, onLogout, on
   catalog: Product[];
   onAuthOpen: () => void;
   onLogout: () => void;
-  onUserUpdate: (user: AuthUser) => Promise<boolean>;
+  onUserUpdate: (user: AuthUser) => void;
   onWishlist: (id: string) => void;
   onDetail: (p: Product) => void;
 }) {
@@ -4412,16 +3715,10 @@ function AccountPage({ user, wishlist, orders, catalog, onAuthOpen, onLogout, on
   );
   const [name, setName] = useState(user?.name ?? '');
   const [nameSaved, setNameSaved] = useState(false);
-  const [profileSaving, setProfileSaving] = useState(false);
-  const [profileError, setProfileError] = useState('');
   const [address, setAddress] = useState(() => {
     try { return localStorage.getItem('aggarwal-saved-address') ?? ''; } catch { return ''; }
   });
   const [addrSaved, setAddrSaved] = useState(false);
-
-  useEffect(() => {
-    setName(user?.name ?? '');
-  }, [user?.email, user?.name]);
 
   const wishlisted = catalog.filter(p => wishlist.includes(p.id));
 
@@ -4480,7 +3777,6 @@ function AccountPage({ user, wishlist, orders, catalog, onAuthOpen, onLogout, on
             <div className="grid grid-cols-2 gap-1 rounded-2xl border border-border bg-background p-2 shadow-sm sm:flex">
               {tabs.map(({ key, label, icon: Icon }) => (
                 <button key={key} onClick={() => setTab(key)}
-                  data-testid={`mobile-tab-${key}`}
                   className={`flex min-w-0 items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold transition-colors sm:shrink-0 ${tab === key ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}>
                   <Icon className="size-3.5 shrink-0" /> <span className="truncate">{label}</span>
                 </button>
@@ -4539,18 +3835,6 @@ function AccountPage({ user, wishlist, orders, catalog, onAuthOpen, onLogout, on
                             <MapPin className="mt-0.5 size-3.5 shrink-0" />
                             <span className="ml-1.5">{order.address}</span>
                           </p>
-                        )}
-                        {order.status === 'Delivered' && (order.receiverName || order.deliveryContact || order.deliveryRemarks) && (
-                          <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-emerald-950">
-                            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-700">
-                              <PackageCheck className="size-4" /> Delivery details
-                            </div>
-                            <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
-                              <p><span className="text-emerald-700">Received by:</span> <b>{order.receiverName || '—'}</b></p>
-                              <p><span className="text-emerald-700">Contact:</span> <b>{order.deliveryContact || '—'}</b></p>
-                              <p className="break-words sm:col-span-2"><span className="text-emerald-700">Remarks:</span> {order.deliveryRemarks || '—'}</p>
-                            </div>
-                          </div>
                         )}
                       </div>
                     ))}
@@ -4613,21 +3897,15 @@ function AccountPage({ user, wishlist, orders, catalog, onAuthOpen, onLogout, on
                     <input id="account-name" value={name} onChange={e => { setName(e.target.value); setNameSaved(false); }}
                       placeholder="Your name" className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-ring" />
                   </div>
-                  {profileError && <p className="text-xs font-semibold text-destructive">{profileError}</p>}
                   <button
-                    onClick={async () => {
-                      setProfileSaving(true);
-                      setProfileError('');
+                    onClick={() => {
                       const updated: AuthUser = { ...user, name };
-                      const saved = await onUserUpdate(updated);
-                      setNameSaved(saved);
-                      if (!saved) setProfileError('Could not save your profile. Please try again.');
-                      setProfileSaving(false);
+                      onUserUpdate(updated);
+                      setNameSaved(true);
                     }}
-                    disabled={profileSaving}
                     className="flex items-center gap-2 rounded-full bg-primary px-5 py-3 text-xs font-bold text-primary-foreground"
                     data-testid="button-save-profile">
-                    {profileSaving ? <><Loader2 className="size-4 animate-spin" /> Saving…</> : nameSaved ? <><Check className="size-4" /> Saved!</> : 'Save profile'}
+                    {nameSaved ? <><Check className="size-4" /> Saved!</> : 'Save profile'}
                   </button>
                 </div>
                 <div className="mt-6 rounded-2xl border border-destructive/30 bg-background p-6 shadow-sm">
@@ -4675,7 +3953,7 @@ type ShellChildProps = {
   orders: OrderRecord[];
   user: AuthUser | null;
   onWishlist: (id: string) => void;
-  onUserUpdate: (user: AuthUser) => Promise<boolean>;
+  onUserUpdate: (user: AuthUser) => void;
   onDetail: (p: Product) => void;
   onAdd: (p: Product, v?: ProductVariant) => void;
   onAuthOpen: () => void;
@@ -4688,8 +3966,12 @@ type ShellRenderProp = (props: ShellChildProps) => React.ReactNode;
 // ─── Shared shell (shared cart, auth, overlays) ────────────────────────────────
 function SharedShell({ children }: { children: ShellRenderProp }) {
   const [catalog, setCatalog] = useState<Product[]>(products); // static default; API replaces on mount
-  const [cart, setCart] = useState<CartLine[]>(readCart);
-  const [wishlist, setWishlist] = useState<string[]>(readWishlist);
+  const [cart, setCart] = useState<CartLine[]>(() => {
+    try { return JSON.parse(localStorage.getItem('aggarwal-cart') || '[]'); } catch { return []; }
+  });
+  const [wishlist, setWishlist] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('aggarwal-wishlist') || '[]'); } catch { return []; }
+  });
   const [orders, setOrders] = useState<OrderRecord[]>([]);
   const [user, setUser] = useState<AuthUser | null>(readUser);
   const [cartOpen, setCartOpen] = useState(false);
@@ -4795,57 +4077,34 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
     } catch { return 'Could not validate coupon. Please try again.'; }
   };
 
-  const handleLogout = async () => {
-    await apiLogout();
+  const handleLogout = () => {
     localStorage.removeItem('aggarwal-user');
     setUser(null);
   };
 
   const handleLogin = (u: AuthUser) => {
     setUser(u);
-    if (u.role !== 'admin') {
-      void (async () => {
-        const savedProfile = await apiFetchCustomerProfile();
-        const customer = savedProfile ?? u;
-        localStorage.setItem('aggarwal-user', JSON.stringify(customer));
-        setUser(current => current?.email === customer.email ? customer : current);
-        await apiTrackCustomer(customer);
-      })();
-    }
+    if (u.role !== 'admin') apiTrackCustomer(u);
     if (pendingCheckout) {
       setPendingCheckout(false);
       setAuthOpen(false);
       setCheckout(true);
     }
   };
-  const handleUserUpdate = async (updatedUser: AuthUser) => {
-    if (updatedUser.role !== 'admin' && !(await apiTrackCustomer(updatedUser))) return false;
+  const handleUserUpdate = (updatedUser: AuthUser) => {
     localStorage.setItem('aggarwal-user', JSON.stringify(updatedUser));
     setUser(updatedUser);
-    return true;
+    if (updatedUser.role !== 'admin') apiTrackCustomer(updatedUser);
   };
 
-  const requireCustomerSignIn = () => {
-    localStorage.removeItem('aggarwal-user');
-    setUser(null);
+  const handleProceedCheckout = () => {
     setCartOpen(false);
-    setCheckout(false);
-    setPendingCheckout(true);
-    setAuthOpen(true);
-  };
-
-  const handleProceedCheckout = async () => {
-    setCartOpen(false);
-    if (!user || user.role !== 'customer') {
-      requireCustomerSignIn();
-      return;
+    if (!user) {
+      setPendingCheckout(true);
+      setAuthOpen(true);
+    } else {
+      setCheckout(true);
     }
-    const sessionStatus = await apiCheckCustomerSession();
-    if (sessionStatus === 'invalid') {
-      requireCustomerSignIn();
-      return;
-    }
-    setCheckout(true);
   };
 
   const [, shellNavigate] = useLocation();
@@ -4867,7 +4126,6 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
         <PromoMarquee />
         <Header
           itemCount={itemCount}
-          wishlistCount={wishlist.length}
           onCartOpen={() => setCartOpen(true)}
           user={user}
           onAuthOpen={() => setAuthOpen(true)}
@@ -4902,7 +4160,6 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
             onClose={() => setCheckout(false)}
             onDone={(_order) => { setCheckout(false); setOrdered(true); setCart([]); setCoupon(null); }}
             onOrderCreated={handleOrderCreated}
-            onAuthenticationRequired={requireCustomerSignIn}
             user={user}
           />
         )}
@@ -5159,7 +4416,6 @@ function ContactPage() {
 // ─── Product Detail Page ──────────────────────────────────────────────────────
 function ProductDetailPage({ onAdd, user }: { onAdd: (p: Product, v?: ProductVariant) => void; user: AuthUser | null }) {
   const { id } = useParams<{ id: string }>();
-  const settings = useSiteSettings();
   const [product, setProduct] = useState<Product | null>(null);
   const [reviews, setReviews] = useState<ProductReview[]>([]);
   const [loading, setLoading] = useState(true);
@@ -5236,11 +4492,7 @@ function ProductDetailPage({ onAdd, user }: { onAdd: (p: Product, v?: ProductVar
         <ChevronRightSmall className="size-3" />
         <Link href="/shop" className="hover:text-foreground">Shop</Link>
         <ChevronRightSmall className="size-3" />
-         <Link href={`/shop/${product.category.toLowerCase()}`} className="text-secondary hover:underline">
-           {getConfiguredCategoryLabel(product.category, settings)}
-         </Link>
-         <ChevronRightSmall className="size-3" />
-         <span className="text-foreground">{product.name}</span>
+        <span className="text-foreground">{product.name}</span>
       </nav>
 
       {/* Main grid */}
@@ -5257,9 +4509,7 @@ function ProductDetailPage({ onAdd, user }: { onAdd: (p: Product, v?: ProductVar
 
         {/* Details */}
         <div className="flex flex-col">
-          <Link href={`/shop/${product.category.toLowerCase()}`} className="font-mono-ui text-[10px] uppercase tracking-[.25em] text-secondary hover:underline">
-            {getConfiguredCategoryLabel(product.category, settings)}
-          </Link>
+          <p className="font-mono-ui text-[10px] uppercase tracking-[.25em] text-secondary">{product.category}</p>
           <h1 className="mt-2 font-display text-3xl font-semibold leading-tight sm:text-4xl">{product.name}</h1>
 
           {/* Rating row */}

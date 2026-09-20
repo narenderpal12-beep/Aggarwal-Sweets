@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, adminSettingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { createSession } from "../lib/session.js";
+import { clearSession, createSession } from "../lib/session.js";
 
 const ADMIN_EMAIL   = "admin@aggarwalsweets.in";
 const DEFAULT_ADMIN_PASSWORD = "Admin@123";
@@ -33,6 +33,11 @@ router.post("/auth/admin", async (req, res) => {
   } else {
     res.status(401).json({ success: false, error: "Invalid credentials" });
   }
+});
+
+router.post("/auth/logout", (_req, res) => {
+  clearSession(res);
+  res.json({ success: true });
 });
 
 export default router;

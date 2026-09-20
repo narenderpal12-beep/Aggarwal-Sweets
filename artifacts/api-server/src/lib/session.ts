@@ -43,6 +43,13 @@ export function createSession(res: Response, email: string, role: SessionRole) {
   );
 }
 
+export function clearSession(res: Response) {
+  res.setHeader(
+    "Set-Cookie",
+    `${COOKIE_NAME}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`,
+  );
+}
+
 export function getSession(req: Request): SessionPayload | null {
   const token = cookieValue(req, COOKIE_NAME);
   if (!token) return null;
