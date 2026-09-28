@@ -14,6 +14,8 @@ export const productsTable = pgTable("products", {
   reviews:     integer("reviews").notNull().default(0),
   tags:        jsonb("tags").$type<string[]>().notNull().default([]),
   variants:    jsonb("variants").$type<Array<{ material: string; weight: string; price: number }>>().notNull().default([]),
+  active:      boolean("active").notNull().default(true),
+  schedule:    jsonb("schedule").$type<Array<{ day: number; start: string; end: string }> | null>(),
 });
 
 // ─── Orders ───────────────────────────────────────────────────────────────────
@@ -25,7 +27,33 @@ export const ordersTable = pgTable("orders", {
   subtotal:      integer("subtotal").notNull(),
   status:        text("status").notNull().default("Confirmed"),
   customerEmail: text("customer_email"),
+  customerName:  text("customer_name"),
+  receiverName:  text("receiver_name"),
+  deliveryRemarks: text("delivery_remarks"),
+  deliveryContact: text("delivery_contact"),
   items:         jsonb("items").notNull().default([]),
+  pricing:       jsonb("pricing").$type<Record<string, number | string | boolean | undefined> | null>(),
+  paymentMethod: text("payment_method").notNull().default("cod"),
+  paymentStatus: text("payment_status").notNull().default("pending"),
+  paidPaymentId: text("paid_payment_id"),
+});
+
+// Each Razorpay attempt has a separate provider order; COD has one cash entry.
+// Restrict deletion so the admin's "clear orders" action cannot erase financial history.
+export const orderPaymentsTable = pgTable("order_payments", {
+  id:               text("id").primaryKey(),
+  orderId:          text("order_id").notNull().references(() => ordersTable.id, { onDelete: "restrict" }),
+  customerEmail:    text("customer_email").notNull(),
+  method:           text("method").notNull(),
+  status:           text("status").notNull().default("created"),
+  amountPaise:      integer("amount_paise").notNull(),
+  currency:         text("currency").notNull().default("INR"),
+  gatewayOrderId:   text("gateway_order_id").unique(),
+  gatewayPaymentId: text("gateway_payment_id").unique(),
+  refundedPaise:    integer("refunded_paise").notNull().default(0),
+  failureReason:    text("failure_reason"),
+  createdAt:        timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:        timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 // ─── Customers ────────────────────────────────────────────────────────────────
@@ -92,3 +120,4 @@ export type DbBlogPost      = typeof blogPostsTable.$inferSelect;
 export type DbCoupon        = typeof couponCodesTable.$inferSelect;
 export type DbProductReview = typeof productReviewsTable.$inferSelect;
 export type DbOtpCode       = typeof otpCodesTable.$inferSelect;
+export type DbOrderPayment  = typeof orderPaymentsTable.$inferSelect;
