@@ -13,9 +13,11 @@ import {
   LogOut, Eye, EyeOff, Pencil, RefreshCw, Users, Loader2,
   Tag, Percent, Upload, Palette, FileText, ImageIcon, Type, LayoutList, Facebook,
   Bell, BellRing, Volume2, VolumeX, Download, CalendarDays, BarChart3, FileSpreadsheet,
-  Printer, TrendingUp, Filter, CircleDot
+  TrendingUp, Filter, CircleDot
 } from 'lucide-react';
 import NotFound from '@/pages/not-found';
+import { PrivacyPolicyPage, ReturnsCancellationPage, TermsConditionsPage } from '@/pages/policies';
+import { IMAGE_UPLOAD_HINT, readAdminImage, checkImageSaveSize, requireImageSave } from '@/lib/admin-image-upload';
 
 const queryClient = new QueryClient();
 
@@ -26,7 +28,9 @@ type Product = {
   id: string; name: string; category: string; price: number; unit: string;
   rating: number; reviews: number; description: string; image: string; badge?: string;
   variants: ProductVariant[]; tags?: string[];
+  active?: boolean; schedule?: AvailabilityWindow[] | null;
 };
+type AvailabilityWindow = { day: number; start: string; end: string };
 type CouponCode = { code: string; type: 'percent' | 'amount'; value: number; minOrder: number; active: boolean; description: string };
 type AppliedCoupon = { code: string; discount: number };
 type CartLine = { product: Product; variant: ProductVariant; quantity: number };
@@ -35,7 +39,15 @@ type CustomerRecord = {
   email: string; name?: string; joinedAt: string; phone?: string; address?: string;
   orderCount?: number; totalSpent?: number; lastOrderAt?: string;
 };
-type OrderStatus = 'Confirmed' | 'Packing' | 'Out for delivery' | 'Delivered';
+type OrderStatus = 'Awaiting payment' | 'Payment failed' | 'Confirmed' | 'Packing' | 'Out for delivery' | 'Delivered';
+type PaymentMethod = 'cod' | 'razorpay';
+type PaymentState = 'pending' | 'paid' | 'failed' | 'refunded';
+type PaymentRecord = {
+  id: string; orderId: string; customerEmail: string; method: PaymentMethod;
+  status: string; amountPaise: number; refundedPaise: number; currency: string;
+  gatewayPaymentId?: string | null; failureReason?: string | null; createdAt: string; updatedAt: string;
+};
+type RazorpayCheckout = { keyId: string; gatewayOrderId: string; amountPaise: number; currency: string };
 type DeliveryDetails = {
   receiverName: string;
   deliveryRemarks: string;
@@ -43,9 +55,32 @@ type DeliveryDetails = {
 };
 type OrderRecord = {
   id: string; date: string; items: CartLine[]; subtotal: number;
+  pricing?: OrderPricing;
   status: OrderStatus; address: string; phone: string;
+  paymentMethod?: PaymentMethod; paymentStatus?: PaymentState;
   customerEmail?: string; customerName?: string;
   receiverName?: string; deliveryRemarks?: string; deliveryContact?: string;
+};
+type AdditionalSettings = {
+  minimumOrderValue: number;
+  gstEnabled: boolean;
+  gstPercent: number;
+  deliveryEnabled: boolean;
+  deliveryCharge: number;
+  deliveryWaiveMinimum: number;
+  handlingEnabled: boolean;
+  handlingCharge: number;
+};
+type OrderPricing = {
+  itemsSubtotal: number;
+  discount: number;
+  gstPercent: number;
+  gst: number;
+  deliveryCharge: number;
+  deliveryWaived: boolean;
+  handlingCharge: number;
+  total: number;
+  couponCode?: string;
 };
 type HeroSlide = {
   id: string; eyebrow: string; heading: string; highlight: string; ending: string;
@@ -297,6 +332,25 @@ const blogPosts: BlogPost[] = [
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const money = (value: number) => `₹${value.toLocaleString('en-IN')}`;
+function formatOrderDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short',
+  }).format(date);
+}
+function paymentBadgeClass(status: string) {
+  if (['paid', 'captured', 'received'].includes(status)) return 'bg-emerald-100 text-emerald-800';
+  if (status === 'partially_refunded') return 'bg-orange-100 text-orange-800';
+  if (['failed', 'refunded', 'duplicate_capture'].includes(status)) return 'bg-red-100 text-red-800';
+  return 'bg-amber-100 text-amber-800';
+}
+function paymentStatusLabel(status: string) {
+  return status === 'captured' ? 'Paid'
+    : status === 'partially_refunded' ? 'Partially refunded'
+    : status === 'duplicate_capture' ? 'Duplicate charge — contact the store for a refund'
+    : status;
+}
 const defaultVariant = (product: Product): ProductVariant =>
   product.variants[0] ?? { material: 'Standard', weight: product.unit, price: product.price };
 const variantLabel = (variant: ProductVariant) => `${variant.material} · ${variant.weight}`;
@@ -330,7 +384,7 @@ function normalizeOrder(value: unknown): OrderRecord | null {
   if (!value || typeof value !== 'object') return null;
   const order = value as Partial<OrderRecord>;
   if (typeof order.id !== 'string' || !order.id) return null;
-  const validStatuses: OrderStatus[] = ['Confirmed', 'Packing', 'Out for delivery', 'Delivered'];
+  const validStatuses: OrderStatus[] = ['Awaiting payment', 'Payment failed', 'Confirmed', 'Packing', 'Out for delivery', 'Delivered'];
   return {
     id: order.id,
     date: typeof order.date === 'string' ? order.date : '',
@@ -346,6 +400,9 @@ function normalizeOrder(value: unknown): OrderRecord | null {
       : [],
     subtotal: typeof order.subtotal === 'number' && Number.isFinite(order.subtotal) ? order.subtotal : 0,
     status: validStatuses.includes(order.status as OrderStatus) ? order.status as OrderStatus : 'Confirmed',
+    paymentMethod: order.paymentMethod === 'razorpay' ? 'razorpay' : 'cod',
+    paymentStatus: ['pending', 'paid', 'failed', 'refunded'].includes(order.paymentStatus as string)
+      ? order.paymentStatus as PaymentState : 'pending',
     address: typeof order.address === 'string' ? order.address : '',
     phone: typeof order.phone === 'string' ? order.phone : '',
     customerEmail: typeof order.customerEmail === 'string' ? order.customerEmail : undefined,
@@ -353,6 +410,7 @@ function normalizeOrder(value: unknown): OrderRecord | null {
     receiverName: typeof order.receiverName === 'string' ? order.receiverName : undefined,
     deliveryRemarks: typeof order.deliveryRemarks === 'string' ? order.deliveryRemarks : undefined,
     deliveryContact: typeof order.deliveryContact === 'string' ? order.deliveryContact : undefined,
+    pricing: order.pricing && typeof order.pricing === 'object' ? order.pricing : undefined,
   };
 }
 
@@ -393,11 +451,29 @@ async function apiFetchCatalog(): Promise<Product[]> {
   } catch { return products; /* static fallback */ }
 }
 
+async function apiSubmitNewsletter(contact: {
+  name: string;
+  email: string;
+  mobile: string;
+  message: string;
+  company: string;
+}): Promise<void> {
+  const response = await fetch(`${API}/newsletter`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(contact),
+  });
+  const result = await response.json().catch(() => ({})) as { error?: unknown };
+  if (!response.ok) {
+    throw new Error(typeof result.error === 'string' ? result.error : 'We could not send your request. Please try again.');
+  }
+}
+
 type SaveOrderResult =
-  | { order: OrderRecord; error?: never; message?: never }
+  | { order: OrderRecord; checkout?: RazorpayCheckout; error?: never; message?: never }
   | { order: null; error: 'authentication' | 'request'; message: string };
 
-async function apiSaveOrderToDb(order: OrderRecord): Promise<SaveOrderResult> {
+async function apiSaveOrderToDb(order: Omit<OrderRecord, 'id' | 'date'> & { id?: string; date?: string; paymentMethod?: PaymentMethod }): Promise<SaveOrderResult> {
   try {
     const response = await fetch(`${API}/orders`, {
       method: 'POST',
@@ -416,15 +492,132 @@ async function apiSaveOrderToDb(order: OrderRecord): Promise<SaveOrderResult> {
         message: typeof body.error === 'string' ? body.error : 'We could not save your order. Please try again.',
       };
     }
-    const savedOrder = body as OrderRecord;
+    const responseBody = body as OrderRecord | { order: OrderRecord; checkout: RazorpayCheckout };
+    const savedOrder = 'order' in responseBody ? responseBody.order : responseBody;
     if (savedOrder.customerEmail && savedOrder.customerName) {
-      await apiTrackCustomer({ email: savedOrder.customerEmail, name: savedOrder.customerName, role: 'customer' });
+      void apiTrackCustomer({ email: savedOrder.customerEmail, name: savedOrder.customerName, role: 'customer' }).catch(() => {});
     }
     window.dispatchEvent(new Event('aggarwal-order-created'));
-    return { order: savedOrder };
+    return { order: savedOrder, checkout: 'checkout' in responseBody ? responseBody.checkout : undefined };
   } catch {
     return { order: null, error: 'request', message: 'We could not reach the order server. Please check your connection and try again.' };
   }
+}
+
+async function apiFetchPayments(mine = false): Promise<PaymentRecord[]> {
+  const response = await fetch(`${API}/payments${mine ? '/mine' : ''}`, { credentials: 'include', cache: 'no-store' });
+  const data = await response.json().catch(() => []);
+  if (!response.ok) throw new Error(typeof data?.error === 'string' ? data.error : 'Could not load payment history.');
+  return Array.isArray(data) ? data as PaymentRecord[] : [];
+}
+
+type AdminTableReport = { title: string; summary: string[]; headers: string[]; rows: string[][] };
+
+function downloadReportFile(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function downloadAdminExcelReport(report: AdminTableReport, filename: string) {
+  const escapeHtml = (value: string) => value.replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[char] ?? char));
+  const summary = report.summary.map(line => `<p>${escapeHtml(line)}</p>`).join('');
+  const header = report.headers.map(label => `<th>${escapeHtml(label)}</th>`).join('');
+  const body = report.rows.map(row =>
+    `<tr>${row.map(cell => `<td>${escapeHtml(cell).replace(/\n/g, '<br>')}</td>`).join('')}</tr>`
+  ).join('');
+  const emptyRow = `<tr><td colspan="${report.headers.length}">No records match this report.</td></tr>`;
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(report.title)}</title><style>body{font:12px Arial;color:#222;padding:24px}h1{font-size:20px}table{border-collapse:collapse;width:100%;font-size:10px}th,td{border:1px solid #bbb;padding:5px;text-align:left;vertical-align:top}th{background:#eee}p{margin:6px 0 10px}</style></head><body><h1>${escapeHtml(report.title)}</h1>${summary}<table><thead><tr>${header}</tr></thead><tbody>${body || emptyRow}</tbody></table></body></html>`;
+  downloadReportFile(new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8' }), filename);
+}
+
+async function fetchAdminReportPdf(report: AdminTableReport): Promise<Blob> {
+  const response = await fetch(`${API}/reports/pdf`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(report),
+  });
+  if (!response.ok) {
+    const result = await response.json().catch(() => ({}));
+    throw new Error(typeof result.error === 'string' ? result.error : `Could not download the PDF (HTTP ${response.status}).`);
+  }
+  const blob = await response.blob();
+  if (!blob.size || (blob.type && !blob.type.includes('application/pdf'))) {
+    throw new Error('The server returned an invalid PDF. Please try again.');
+  }
+  return blob;
+}
+
+async function apiStartOrderCheckout(id: string): Promise<{ order: OrderRecord; checkout?: RazorpayCheckout; alreadyPaid?: boolean }> {
+  const response = await fetch(`${API}/payments/orders/${encodeURIComponent(id)}/checkout`, {
+    method: 'POST', credentials: 'include',
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error ?? 'Could not reopen secure checkout.');
+  return data;
+}
+
+async function apiVerifyRazorpay(payload: { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string }): Promise<OrderRecord> {
+  const response = await fetch(`${API}/payments/razorpay/verify`, {
+    method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error('Payment status could not be confirmed yet. Check My Orders before paying again.');
+  return data.order as OrderRecord;
+}
+
+declare global {
+  interface Window { Razorpay?: new (options: Record<string, unknown>) => { open: () => void }; }
+}
+
+let razorpayScriptPromise: Promise<void> | null = null;
+function loadRazorpayCheckout(): Promise<void> {
+  if (window.Razorpay) return Promise.resolve();
+  if (razorpayScriptPromise) return razorpayScriptPromise;
+  const existing = document.querySelector<HTMLScriptElement>('script[data-razorpay-checkout]');
+  if (existing && existing.dataset.razorpayLoadState !== 'loading' &&
+      !(existing.dataset.razorpayLoadState === 'loaded' && window.Razorpay)) existing.remove();
+  const script = existing?.dataset.razorpayLoadState === 'loading' ? existing : document.createElement('script');
+  if (script !== existing) {
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.async = true;
+    script.dataset.razorpayCheckout = 'true';
+    script.dataset.razorpayLoadState = 'loading';
+  }
+  razorpayScriptPromise = new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      script.onload = null;
+      script.onerror = null;
+      if (error || !window.Razorpay) {
+        script.dataset.razorpayLoadState = 'failed';
+        script.remove();
+        razorpayScriptPromise = null;
+        reject(error ?? new Error('Secure checkout did not initialize. Please try again.'));
+        return;
+      }
+      script.dataset.razorpayLoadState = 'loaded';
+      resolve();
+    };
+    script.onload = () => finish();
+    script.onerror = () => finish(new Error('Secure checkout could not be loaded. Check your connection and try again.'));
+    if (!existing || script !== existing) document.body.appendChild(script);
+    else if (script.dataset.razorpayLoadState === 'loaded' ||
+      (script as HTMLScriptElement & { readyState?: string }).readyState === 'complete') {
+      queueMicrotask(() => finish());
+    }
+  });
+  return razorpayScriptPromise;
 }
 
 async function apiCheckCustomerSession(): Promise<'valid' | 'invalid' | 'unavailable'> {
@@ -517,6 +710,7 @@ async function apiValidateAdmin(email: string, password: string): Promise<boolea
   try {
     const r = await fetch(`${API}/auth/admin`, {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
     });
@@ -524,13 +718,190 @@ async function apiValidateAdmin(email: string, password: string): Promise<boolea
   } catch { return false; }
 }
 
+async function apiCheckAdminSession(): Promise<'valid' | 'invalid' | 'unavailable'> {
+  try {
+    const response = await fetch(`${API}/auth/admin/session`, { credentials: 'include' });
+    if (response.status === 401) return 'invalid';
+    return response.ok ? 'valid' : 'unavailable';
+  } catch {
+    return 'unavailable';
+  }
+}
+
 const ADMIN_EMAIL = 'admin@aggarwalsweets.in';
-type AdminSection = 'dashboard' | 'products' | 'orders' | 'customers' | 'categories' | 'settings' | 'blog' | 'coupons' | 'reviews';
-type MasterCategory = { id: string; label: string; note: string; image: string; inMenu: boolean; inCraving: boolean };
+type AdminSection = 'dashboard' | 'products' | 'orders' | 'payments' | 'other-records' | 'customers' | 'categories' | 'settings' | 'additional' | 'blog' | 'coupons' | 'reviews';
+type MasterCategory = { id: string; label: string; note: string; image: string; inMenu: boolean; inCraving: boolean; active?: boolean; schedule?: AvailabilityWindow[] | null };
+
+const ADMIN_SETTINGS_VISIBILITY_OPTIONS = [
+  { key: 'paymentMethods', label: 'Payment methods' },
+  { key: 'adminAccount', label: 'Admin account' },
+  { key: 'changePassword', label: 'Change password' },
+  { key: 'storeInformation', label: 'Store information' },
+  { key: 'storeLogo', label: 'Store logo' },
+  { key: 'brandColours', label: 'Brand colours' },
+  { key: 'heroSlider', label: 'Hero slider' },
+  { key: 'announcementStrip', label: 'Top announcement strip' },
+  { key: 'benefitStrip', label: 'Benefit strip' },
+  { key: 'categories', label: 'Categories information' },
+  { key: 'unitPresets', label: 'Unit presets' },
+  { key: 'dangerZone', label: 'Danger zone' },
+] as const;
+type AdminSettingsVisibilityKey = (typeof ADMIN_SETTINGS_VISIBILITY_OPTIONS)[number]['key'];
+type AdminSettingsVisibility = Record<AdminSettingsVisibilityKey, boolean>;
+const DEFAULT_ADMIN_SETTINGS_VISIBILITY = Object.fromEntries(
+  ADMIN_SETTINGS_VISIBILITY_OPTIONS.map(({ key }) => [key, true])
+) as AdminSettingsVisibility;
+
+function parseAdminSettingsVisibility(value?: string): AdminSettingsVisibility {
+  if (!value) return { ...DEFAULT_ADMIN_SETTINGS_VISIBILITY };
+  try {
+    const saved: unknown = JSON.parse(value);
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) {
+      return { ...DEFAULT_ADMIN_SETTINGS_VISIBILITY };
+    }
+    const values = saved as Partial<AdminSettingsVisibility>;
+    return Object.fromEntries(
+      ADMIN_SETTINGS_VISIBILITY_OPTIONS.map(({ key }) => [key, values[key] !== false])
+    ) as AdminSettingsVisibility;
+  } catch {
+    return { ...DEFAULT_ADMIN_SETTINGS_VISIBILITY };
+  }
+}
 
 // ─── Site settings context ────────────────────────────────────────────────────
 const SiteSettingsContext = createContext<Record<string, string>>({});
 const useSiteSettings = () => useContext(SiteSettingsContext);
+const DEFAULT_ADDITIONAL_SETTINGS: AdditionalSettings = {
+  minimumOrderValue: 0, gstEnabled: false, gstPercent: 0,
+  deliveryEnabled: false, deliveryCharge: 0, deliveryWaiveMinimum: 0,
+  handlingEnabled: false, handlingCharge: 0,
+};
+
+function parseAdditionalSettings(value?: string): AdditionalSettings {
+  try {
+    const saved = value ? JSON.parse(value) as Partial<AdditionalSettings> : {};
+    const amount = (input: unknown, fallback: number) =>
+      typeof input === 'number' && Number.isFinite(input) && input >= 0 ? input : fallback;
+    return {
+      minimumOrderValue: amount(saved.minimumOrderValue, 0),
+      gstEnabled: saved.gstEnabled === true,
+      gstPercent: Math.min(100, amount(saved.gstPercent, 0)),
+      deliveryEnabled: saved.deliveryEnabled === true,
+      deliveryCharge: amount(saved.deliveryCharge, 0),
+      deliveryWaiveMinimum: amount(saved.deliveryWaiveMinimum, 0),
+      handlingEnabled: saved.handlingEnabled === true,
+      handlingCharge: amount(saved.handlingCharge, 0),
+    };
+  } catch { return DEFAULT_ADDITIONAL_SETTINGS; }
+}
+
+function calculateOrderPricing(itemsSubtotal: number, discount: number, settings: AdditionalSettings, couponCode?: string): OrderPricing {
+  const safeDiscount = Math.min(Math.max(0, discount), itemsSubtotal);
+  const discountedItems = Math.max(0, itemsSubtotal - safeDiscount);
+  const gstPercent = settings.gstEnabled ? settings.gstPercent : 0;
+  const gst = Math.round(discountedItems * gstPercent / 100);
+  const deliveryWaived = settings.deliveryEnabled && settings.deliveryCharge > 0 &&
+    settings.deliveryWaiveMinimum > 0 && itemsSubtotal >= settings.deliveryWaiveMinimum;
+  const deliveryCharge = settings.deliveryEnabled && !deliveryWaived ? settings.deliveryCharge : 0;
+  const handlingCharge = settings.handlingEnabled ? settings.handlingCharge : 0;
+  return {
+    itemsSubtotal, discount: safeDiscount, gstPercent, gst, deliveryCharge, deliveryWaived, handlingCharge,
+    total: discountedItems + gst + deliveryCharge + handlingCharge,
+    ...(couponCode ? { couponCode } : {}),
+  };
+}
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function indiaClock(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Kolkata', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(now);
+  const part = (type: string) => parts.find(item => item.type === type)?.value ?? '';
+  return { day: DAY_NAMES.indexOf(part('weekday')), minutes: Number(part('hour')) * 60 + Number(part('minute')) };
+}
+
+function availability(active?: boolean, schedule?: AvailabilityWindow[] | null, now = new Date()) {
+  if (active === false) return false;
+  if (schedule == null) return true;
+  const { day, minutes } = indiaClock(now);
+  return schedule.some(window => window.day === day &&
+    minutes >= Number(window.start.slice(0, 2)) * 60 + Number(window.start.slice(3, 5)) &&
+    minutes < Number(window.end.slice(0, 2)) * 60 + Number(window.end.slice(3, 5)));
+}
+
+function scheduleText(active?: boolean, schedule?: AvailabilityWindow[] | null) {
+  if (active === false) return 'Inactive';
+  if (schedule == null) return 'Available every day';
+  if (!schedule.length) return 'No days selected';
+  return schedule.map(window => `${DAY_NAMES[window.day]} ${window.start}–${window.end}`).join(' · ') + ' (IST)';
+}
+
+function useAvailabilityClock() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return now;
+}
+
+function productAvailability(product: Product, settings: Record<string, string>, now: Date) {
+  const category = getConfiguredCategories(settings).find(item => item.label.toLowerCase() === product.category.toLowerCase());
+  return availability(product.active, product.schedule, now) && availability(category?.active, category?.schedule, now);
+}
+
+function AvailabilityNotice({ product, now }: { product: Product; now: Date }) {
+  const settings = useSiteSettings();
+  if (productAvailability(product, settings, now)) return null;
+  return (
+    <div className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+      <strong>Currently unavailable</strong>
+    </div>
+  );
+}
+
+function AvailabilityEditor({ active, schedule, onChange }: {
+  active: boolean; schedule: AvailabilityWindow[] | null;
+  onChange: (active: boolean, schedule: AvailabilityWindow[] | null) => void;
+}) {
+  return (
+    <div className="rounded-xl border border-border bg-muted/30 p-4">
+      <label className="flex cursor-pointer items-center gap-3 text-sm font-semibold">
+        <input type="checkbox" checked={active} onChange={e => onChange(e.target.checked, schedule)} className="size-4 accent-primary" />
+        Active (customers can order when available)
+      </label>
+      <label className="mt-4 flex cursor-pointer items-center gap-3 text-sm font-semibold">
+        <input type="checkbox" checked={schedule !== null} onChange={e => onChange(active, e.target.checked ? DAY_NAMES.map((_, day) => ({ day, start: '16:00', end: '21:00' })) : null)} className="size-4 accent-primary" />
+        Set day-wise hours (India time)
+      </label>
+      {schedule !== null && (
+        <div className="mt-3 space-y-2">
+          {DAY_NAMES.map((name, day) => {
+            const slot = schedule.find(window => window.day === day);
+            return (
+              <div key={day} className="flex items-center gap-2 text-xs sm:gap-3">
+                <label className="flex w-16 items-center gap-2">
+                  <input type="checkbox" checked={!!slot} onChange={e => onChange(active, e.target.checked
+                    ? [...schedule, { day, start: '16:00', end: '21:00' }].sort((a, b) => a.day - b.day)
+                    : schedule.filter(window => window.day !== day))} className="size-4 accent-primary" />
+                  {name}
+                </label>
+                <input type="time" disabled={!slot} required={!!slot} value={slot?.start ?? '16:00'} aria-label={`${name} opening time`}
+                  onChange={e => onChange(active, schedule.map(window => window.day === day ? { ...window, start: e.target.value } : window))}
+                  className="min-w-0 rounded-lg border border-input bg-background px-2 py-1.5 disabled:opacity-40" />
+                <span>to</span>
+                <input type="time" disabled={!slot} required={!!slot} min={slot?.start} value={slot?.end ?? '21:00'} aria-label={`${name} closing time`}
+                  onChange={e => onChange(active, schedule.map(window => window.day === day ? { ...window, end: e.target.value } : window))}
+                  className="min-w-0 rounded-lg border border-input bg-background px-2 py-1.5 disabled:opacity-40" />
+              </div>
+            );
+          })}
+          <p className="text-xs text-muted-foreground">End time must be later than start time. Unchecked days are closed.</p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function getConfiguredCategories(settings: Record<string, string>): MasterCategory[] {
   try {
@@ -1089,13 +1460,24 @@ function PromoMarquee() {
     } catch { /* fall through */ }
     return DEFAULT_PROMO_ITEMS;
   })();
+  const additional = parseAdditionalSettings(settings.additional_settings);
+  const promoItems = additional.deliveryEnabled && additional.deliveryCharge > 0
+    ? items.map(item => item === 'Free local delivery over ₹799'
+      ? (additional.deliveryWaiveMinimum > 0
+        ? `Free local delivery on orders ₹${additional.deliveryWaiveMinimum.toLocaleString('en-IN')}+`
+        : 'Local delivery available across Sirsa')
+      : item)
+    : items;
+  const visiblePromoItems = settings.cod_enabled === 'false'
+    ? promoItems.filter(item => item.toLowerCase() !== 'cod available across sirsa')
+    : promoItems;
   return (
     <div className="promo-marquee border-b border-primary-foreground/10 bg-primary text-primary-foreground" aria-label="Store promotions">
       <div className="marquee-window">
         <div className="marquee-track promo-track">
           {[0, 1].map(copy => (
             <div className="flex items-center" key={copy} aria-hidden={copy === 1}>
-              {items.flatMap((item, i) => [<span key={i}>{item}</span>, <i key={`d${i}`} />])}
+              {visiblePromoItems.flatMap((item, i) => [<span key={i}>{item}</span>, <i key={`d${i}`} />])}
             </div>
           ))}
         </div>
@@ -1271,12 +1653,13 @@ function TrustStrip() {
 function CategoryRail() {
   const [, navigate] = useLocation();
   const settings = useSiteSettings();
-  const cats: { label: string; note: string; icon: typeof Gift; image: string }[] = (() => {
+  const now = useAvailabilityClock();
+  const cats: { label: string; note: string; icon: typeof Gift; image: string; active?: boolean; schedule?: AvailabilityWindow[] | null }[] = (() => {
     try {
       const stored = settings.categories_master ? JSON.parse(settings.categories_master) : null;
       if (Array.isArray(stored) && stored.length) {
         const visible = (stored as MasterCategory[]).filter(c => c.inCraving !== false).map(c => ({
-          label: c.label, note: c.note, image: c.image, icon: ICON_MAP[c.label] ?? Sparkles,
+          label: c.label, note: c.note, image: c.image, icon: ICON_MAP[c.label] ?? Sparkles, active: c.active, schedule: c.schedule,
         }));
         return visible.length ? visible : DEFAULT_CRAVING_CATEGORIES;
       }
@@ -1295,7 +1678,7 @@ function CategoryRail() {
         </Link>
       </div>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        {cats.map(({ label, note, icon: Icon, image }, i) => (
+        {cats.map(({ label, note, icon: Icon, image, active, schedule }, i) => (
           <button
             key={label}
             onClick={() => navigate(`/shop/${label.toLowerCase()}`)}
@@ -1308,6 +1691,7 @@ function CategoryRail() {
               <Icon className="mb-7 size-6 text-accent" />
               <p className="font-display text-2xl">{label}</p>
               <p className="mt-1 text-xs opacity-80">{note}</p>
+              {!availability(active, schedule, now) && <p className="mt-2 text-xs font-bold">Currently unavailable</p>}
             </div>
             <ArrowRight className="absolute bottom-5 right-5 z-10 size-4 opacity-80 transition-transform group-hover:translate-x-1" />
           </button>
@@ -1334,6 +1718,9 @@ function ProductCard({
   onSetShagun?: (id: string | null) => void;
 }) {
   const [selectedVariant, setSelectedVariant] = useState<ProductVariant>(defaultVariant(product));
+  const now = useAvailabilityClock();
+  const settings = useSiteSettings();
+  const available = productAvailability(product, settings, now);
   const isShagun = shagunProductId === product.id;
   // Hide the toggle for the shagun-box wrapper product itself
   const canBeShagun = product.id !== 'shagun-box';
@@ -1378,6 +1765,7 @@ function ProductCard({
           </div>
           <p className="font-mono-ui text-sm font-bold whitespace-nowrap">{money(selectedVariant.price)}</p>
         </div>
+        <AvailabilityNotice product={product} now={now} />
 
         {/* Weight selector chips */}
         <div className="mt-3 flex flex-wrap gap-1.5">
@@ -1402,16 +1790,17 @@ function ProductCard({
           </Link>
           <button
             onClick={() => onAdd(product, selectedVariant)}
-            className="flex items-center justify-center gap-1.5 rounded-full border border-primary/25 py-2.5 text-xs font-bold text-primary transition-colors hover:bg-primary hover:text-primary-foreground"
+            disabled={!available}
+            className="flex items-center justify-center gap-1.5 rounded-full border border-primary/25 py-2.5 text-xs font-bold text-primary transition-colors hover:bg-primary hover:text-primary-foreground disabled:cursor-not-allowed disabled:opacity-40"
             data-testid={`button-add-${product.id}`}
           >
-            <Plus className="size-3.5" /> Add to box
+            {available && <Plus className="size-3.5" />} {available ? 'Add to cart' : 'Currently unavailable'}
           </button>
         </div>
         {canBeShagun && onSetShagun && (
           <button
             onClick={() => onSetShagun(isShagun ? null : product.id)}
-            className={`mt-2 flex w-full items-center justify-center gap-1.5 rounded-full border py-2 text-[10px] font-bold uppercase tracking-wide transition-colors ${isShagun ? 'border-accent bg-accent text-accent-foreground' : 'border-dashed border-accent/50 text-accent/70 hover:border-accent hover:text-accent'}`}
+            className={`mt-2 hidden w-full items-center justify-center gap-1.5 rounded-full border py-2 text-[10px] font-bold uppercase tracking-wide transition-colors ${isShagun ? 'border-accent bg-accent text-accent-foreground' : 'border-dashed border-accent/50 text-accent/70 hover:border-accent hover:text-accent'}`}
             data-testid={`button-shagun-${product.id}`}
           >
             <Gift className="size-3" />
@@ -1756,14 +2145,8 @@ function BlogPage() {
 }
 
 // ─── Gifting Section ──────────────────────────────────────────────────────────
-function GiftingSection({ products: items, addToCart, shagunProductId }: { products: Product[]; addToCart: (p: Product, v?: ProductVariant) => void; shagunProductId?: string | null }) {
+function GiftingSection({ products: items, shagunProductId }: { products: Product[]; shagunProductId?: string | null }) {
   const shagunProduct = shagunProductId ? items.find(p => p.id === shagunProductId) : null;
-  const shagunWrapper = items.find(p => p.id === 'shagun-box');
-
-  const handleAddShagun = () => {
-    if (shagunWrapper) addToCart(shagunWrapper);
-    if (shagunProduct) addToCart(shagunProduct);
-  };
 
   return (
     <section id="gifting" className="scroll-mt-20 bg-secondary text-secondary-foreground">
@@ -1772,7 +2155,7 @@ function GiftingSection({ products: items, addToCart, shagunProductId }: { produ
           <p className="font-mono-ui text-[10px] uppercase tracking-[.25em] text-accent">For the big little moments</p>
           <h2 className="mt-3 max-w-lg font-display text-4xl leading-tight sm:text-5xl">Don't just send a gift.<br /><em className="font-normal text-accent">Send a feeling.</em></h2>
           <p className="mt-5 max-w-md text-sm leading-7 text-secondary-foreground/75">From a first visit to a fiftieth anniversary, our boxes carry the warmth of your home — even when home is a few cities away.</p>
-          {shagunProduct ? (
+          {shagunProduct && (
             <div className="mt-5 inline-flex items-center gap-2.5 rounded-2xl border border-accent/30 bg-secondary-foreground/5 px-4 py-2.5">
               <img src={shagunProduct.image} alt={shagunProduct.name} className="size-10 rounded-lg object-cover" />
               <div>
@@ -1780,20 +2163,16 @@ function GiftingSection({ products: items, addToCart, shagunProductId }: { produ
                 <p className="font-display text-sm font-semibold text-secondary-foreground">{shagunProduct.name}</p>
               </div>
             </div>
-          ) : (
-            <p className="mt-5 inline-flex items-center gap-2 rounded-2xl border border-dashed border-accent/40 px-4 py-2.5 font-mono-ui text-[10px] uppercase tracking-wider text-accent/70">
-              <Gift className="size-3.5" /> Choose a product below to personalise
-            </p>
           )}
-          <button
-            onClick={handleAddShagun}
-            className="mt-5 inline-flex items-center gap-3 rounded-full bg-accent px-6 py-3.5 text-sm font-bold text-accent-foreground"
-            data-testid="button-add-shagun"
-          >
-            <Gift className="size-4" />
-            {shagunProduct ? `Add Shagun Box with ${shagunProduct.name}` : 'Add Shagun Box'}
-            <ArrowRight className="size-4" />
-          </button>
+          <div className="mt-5 flex flex-wrap gap-3">
+            <Link
+              href="/shop"
+              className="inline-flex items-center gap-2 rounded-full border border-accent/50 px-6 py-3.5 text-sm font-bold text-secondary-foreground transition-colors hover:bg-secondary-foreground/5"
+              data-testid="button-explore-sweets"
+            >
+              Explore every sweet <ArrowRight className="size-4" />
+            </Link>
+          </div>
         </div>
         <div className="relative aspect-[1.45] overflow-hidden rounded-[2rem] border border-accent/30">
           <img
@@ -1803,7 +2182,7 @@ function GiftingSection({ products: items, addToCart, shagunProductId }: { produ
           />
           <div className="absolute bottom-4 left-4 rounded-xl bg-primary/90 px-4 py-3 text-primary-foreground backdrop-blur">
             <p className="font-display text-lg">{shagunProduct?.name ?? 'The Golden Edit'}</p>
-            <p className="mt-1 font-mono-ui text-[10px] uppercase tracking-wider text-accent">Wrapped with a note</p>
+            <p className="mt-1 font-mono-ui text-[10px] uppercase tracking-wider text-accent">A little sweetness, beautifully shared</p>
           </div>
         </div>
       </div>
@@ -1840,10 +2219,23 @@ function Story({ catalog }: { catalog: Product[] }) {
   );
 }
 
-function Newsletter({ value, setValue, done, onSubmit }: { value: string; setValue: (v: string) => void; done: boolean; onSubmit: (e: React.FormEvent<HTMLFormElement>) => void }) {
+function Newsletter({ value, setValue, name, setName, mobile, setMobile, message, setMessage, done, submitting, error, onSubmit }: {
+  value: string;
+  setValue: (v: string) => void;
+  name: string;
+  setName: (v: string) => void;
+  mobile: string;
+  setMobile: (v: string) => void;
+  message: string;
+  setMessage: (v: string) => void;
+  done: boolean;
+  submitting: boolean;
+  error: string;
+  onSubmit: (e: React.FormEvent<HTMLFormElement>) => void;
+}) {
   return (
     <section className="border-y border-border bg-muted/60">
-      <div className="mx-auto flex max-w-7xl flex-col items-start justify-between gap-8 px-5 py-12 sm:px-8 md:flex-row md:items-center">
+      <div className="mx-auto flex max-w-7xl flex-col items-start justify-between gap-8 px-5 py-12 sm:px-8 lg:flex-row lg:items-center">
         <div>
           <p className="font-mono-ui text-[10px] uppercase tracking-[.25em] text-secondary">A sweet note from us</p>
           <h2 className="mt-2 font-display text-3xl font-semibold">Festival dates. Fresh batches. No noise.</h2>
@@ -1854,11 +2246,25 @@ function Newsletter({ value, setValue, done, onSubmit }: { value: string; setVal
             <Check className="size-4 text-accent" /> You're on the list. See you soon.
           </div>
         ) : (
-          <form onSubmit={onSubmit} className="flex w-full max-w-md rounded-full border border-border bg-background p-1.5" data-testid="form-newsletter">
-            <label htmlFor="newsletter-email" className="sr-only">Email address</label>
-            <input id="newsletter-email" type="email" required value={value} onChange={e => setValue(e.target.value)} placeholder="Your email address" className="min-w-0 flex-1 bg-transparent px-4 text-sm outline-none" data-testid="input-newsletter-email" />
-            <button className="shrink-0 rounded-full bg-secondary px-5 py-2.5 text-xs font-bold text-secondary-foreground" data-testid="button-newsletter-submit">Keep me posted</button>
-          </form>
+          <div className="w-full max-w-lg">
+            <form onSubmit={onSubmit} className="relative grid w-full grid-cols-1 gap-3 rounded-2xl border border-border bg-background p-4 sm:grid-cols-2" data-testid="form-newsletter">
+              <label htmlFor="newsletter-email" className="sr-only">Email address</label>
+              <input id="newsletter-email" type="email" maxLength={254} required value={value} onChange={e => setValue(e.target.value)} placeholder="Your email address" className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" data-testid="input-newsletter-email" />
+              <label htmlFor="newsletter-name" className="sr-only">Name</label>
+              <input id="newsletter-name" type="text" maxLength={100} required value={name} onChange={e => setName(e.target.value)} placeholder="Your name" autoComplete="name" className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" data-testid="input-newsletter-name" />
+              <label htmlFor="newsletter-mobile" className="sr-only">Mobile number</label>
+              <input id="newsletter-mobile" type="tel" maxLength={24} required value={mobile} onChange={e => setMobile(e.target.value)} placeholder="Mobile number" autoComplete="tel" className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" data-testid="input-newsletter-mobile" />
+              <label htmlFor="newsletter-message" className="sr-only">Message</label>
+              <textarea id="newsletter-message" rows={3} maxLength={1000} required value={message} onChange={e => setMessage(e.target.value)} placeholder="Your message" className="w-full resize-y rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" data-testid="input-newsletter-message" />
+              <input name="company" type="text" autoComplete="off" tabIndex={-1} aria-hidden="true" className="sr-only" />
+              <div className="flex justify-end sm:col-span-2">
+                <button disabled={submitting} className="rounded-full bg-secondary px-5 py-2.5 text-xs font-bold text-secondary-foreground disabled:cursor-wait disabled:opacity-60" data-testid="button-newsletter-submit">
+                  {submitting ? 'Sending…' : 'Keep me posted'}
+                </button>
+              </div>
+            </form>
+            {error && <p className="mt-2 text-sm text-destructive" role="alert">{error}</p>}
+          </div>
         )}
       </div>
     </section>
@@ -1869,7 +2275,7 @@ function Footer({ logoUrl }: { logoUrl?: string }) {
   return (
     <footer id="visit" className="scroll-mt-20 bg-primary text-primary-foreground">
       <div className="mx-auto max-w-7xl px-5 py-12 sm:px-8">
-        <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-[1.3fr_1fr_1fr_1.2fr]">
+        <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-[1.2fr_1fr_1fr_1fr_1.2fr]">
           <div>
             <div className="flex items-center gap-2">
               {logoUrl ? (
@@ -1899,6 +2305,14 @@ function Footer({ logoUrl }: { logoUrl?: string }) {
             </div>
           </div>
           <div>
+            <p className="font-mono-ui text-[10px] uppercase tracking-widest text-accent">Policies</p>
+            <div className="mt-4 grid gap-3 text-sm text-primary-foreground/65">
+              <Link href="/policies/returns-cancellation">Returns &amp; Cancellation</Link>
+              <Link href="/policies/privacy">Privacy Policy</Link>
+              <Link href="/policies/terms">Terms &amp; Conditions</Link>
+            </div>
+          </div>
+          <div>
             <p className="font-mono-ui text-[10px] uppercase tracking-widest text-accent">Find us</p>
             <p className="mt-4 text-sm leading-6 text-primary-foreground/65">Bhadra Bazar<br />Sirsa<br />Haryana · 125055</p>
           </div>
@@ -1921,6 +2335,8 @@ function Footer({ logoUrl }: { logoUrl?: string }) {
 function ProductDrawer({ product, onClose, onAdd }: { product: Product; onClose: () => void; onAdd: (p: Product, v?: ProductVariant) => void }) {
   const [variant, setVariant] = useState<ProductVariant>(defaultVariant(product));
   const settings = useSiteSettings();
+  const now = useAvailabilityClock();
+  const available = productAvailability(product, settings, now);
   const materials = Array.from(new Set(product.variants.map(v => v.material)));
   const weights = product.variants.filter(v => v.material === variant.material);
   const chooseMaterial = (m: string) => setVariant(product.variants.find(v => v.material === m) || defaultVariant(product));
@@ -1976,8 +2392,9 @@ function ProductDrawer({ product, onClose, onAdd }: { product: Product; onClose:
           <div className="mt-8 rounded-2xl bg-muted p-4 text-xs text-muted-foreground">
             <div className="flex items-center gap-2"><Clock3 className="size-4 text-secondary" /><span>Best enjoyed within 7 days · Packed fresh for you</span></div>
           </div>
-          <button onClick={() => onAdd(product, variant)} className="mt-7 flex w-full items-center justify-center gap-2 rounded-full bg-secondary py-4 text-sm font-bold text-secondary-foreground" data-testid="button-add-product-detail">
-            <ShoppingBag className="size-4" /> Add to my box · {money(variant.price)}
+          <AvailabilityNotice product={product} now={now} />
+          <button onClick={() => onAdd(product, variant)} disabled={!available} className="mt-7 flex w-full items-center justify-center gap-2 rounded-full bg-secondary py-4 text-sm font-bold text-secondary-foreground disabled:cursor-not-allowed disabled:opacity-40" data-testid="button-add-product-detail">
+            <ShoppingBag className="size-4" /> {available ? `Add to cart · ${money(variant.price)}` : 'Currently unavailable'}
           </button>
         </div>
       </div>
@@ -1994,6 +2411,12 @@ function CartDrawer({ cart, subtotal, updateQty, onClose, onCheckout, user, onAu
   const [couponInput, setCouponInput] = useState('');
   const [couponError, setCouponError] = useState('');
   const [couponLoading, setCouponLoading] = useState(false);
+  const settings = useSiteSettings();
+  const charges = parseAdditionalSettings(settings.additional_settings);
+  const now = useAvailabilityClock();
+  const unavailableLines = cart.filter(line => !productAvailability(line.product, settings, now));
+  const pricing = calculateOrderPricing(subtotal, coupon?.discount ?? 0, charges, coupon?.code);
+  const minimumMet = subtotal >= charges.minimumOrderValue;
 
   const handleApplyCoupon = async () => {
     if (!couponInput.trim()) return;
@@ -2078,10 +2501,23 @@ function CartDrawer({ cart, subtotal, updateQty, onClose, onCheckout, user, onAu
                 </div>
               )}
               <div className="flex justify-between text-sm"><span>Subtotal</span><span className={`font-mono-ui font-bold ${coupon ? 'line-through text-muted-foreground text-xs' : ''}`}>{money(subtotal)}</span></div>
-              {coupon && <div className="flex justify-between text-sm font-bold text-green-700"><span>Total (after discount)</span><span className="font-mono-ui">{money(Math.max(0, subtotal - coupon.discount))}</span></div>}
-              <p className="mt-2 text-xs text-muted-foreground">Delivery is free for orders over ₹799 in Sirsa.</p>
+              {coupon && <div className="flex justify-between text-sm text-green-700"><span>Discount ({coupon.code})</span><span>−{money(pricing.discount)}</span></div>}
+              {pricing.gst > 0 && <div className="flex justify-between text-sm"><span>GST ({pricing.gstPercent}%)</span><span>{money(pricing.gst)}</span></div>}
+              {charges.deliveryEnabled && <div className="flex justify-between text-sm"><span>{pricing.deliveryWaived ? 'Delivery charge · waived' : 'Delivery charge'}</span><span>{money(pricing.deliveryCharge)}</span></div>}
+              {charges.handlingEnabled && <div className="flex justify-between text-sm"><span>Handling charge</span><span>{money(pricing.handlingCharge)}</span></div>}
+              <div className="mt-2 flex justify-between border-t border-border pt-2 text-sm font-bold"><span>Order total</span><span className="font-mono-ui">{money(pricing.total)}</span></div>
+              {charges.minimumOrderValue > 0 && (
+                <p className={`mt-2 text-xs ${minimumMet ? 'text-muted-foreground' : 'font-semibold text-amber-800'}`}>
+                  {minimumMet ? `Minimum order: ${money(charges.minimumOrderValue)} · met` : `Add ${money(charges.minimumOrderValue - subtotal)} more to meet the ${money(charges.minimumOrderValue)} minimum order.`}
+                </p>
+              )}
+              {unavailableLines.length > 0 && (
+                <p className="mt-3 rounded-xl bg-amber-50 p-3 text-xs text-amber-900">
+                  {unavailableLines.map(line => line.product.name).join(', ')} currently unavailable. Remove these items or return during their available hours to check out.
+                </p>
+              )}
               {user ? (
-                <button onClick={onCheckout} className="mt-5 flex w-full items-center justify-center gap-2 rounded-full bg-secondary py-4 text-sm font-bold text-secondary-foreground" data-testid="button-proceed-checkout">
+                <button onClick={onCheckout} disabled={unavailableLines.length > 0 || !minimumMet} className="mt-5 flex w-full items-center justify-center gap-2 rounded-full bg-secondary py-4 text-sm font-bold text-secondary-foreground disabled:cursor-not-allowed disabled:opacity-40" data-testid="button-proceed-checkout">
                   Proceed to checkout <ArrowRight className="size-4" />
                 </button>
               ) : (
@@ -2090,7 +2526,7 @@ function CartDrawer({ cart, subtotal, updateQty, onClose, onCheckout, user, onAu
                     <Lock className="size-4 shrink-0" />
                     <span>Sign in to place your order securely.</span>
                   </div>
-                  <button onClick={() => { onClose(); onAuthOpen(); }} className="flex w-full items-center justify-center gap-2 rounded-full bg-primary py-4 text-sm font-bold text-primary-foreground" data-testid="button-cart-signin">
+                  <button onClick={() => { onClose(); onAuthOpen(); }} disabled={!minimumMet || unavailableLines.length > 0} className="flex w-full items-center justify-center gap-2 rounded-full bg-primary py-4 text-sm font-bold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-40" data-testid="button-cart-signin">
                     <UserRound className="size-4" /> Sign in to checkout
                   </button>
                 </div>
@@ -2104,15 +2540,105 @@ function CartDrawer({ cart, subtotal, updateQty, onClose, onCheckout, user, onAu
 }
 
 // ─── Checkout ─────────────────────────────────────────────────────────────────
-function Checkout({ subtotal, cart, onClose, onDone, onOrderCreated, onAuthenticationRequired, user }: {
-  subtotal: number; cart: CartLine[]; onClose: () => void; onDone: (order: OrderRecord) => void;
+function Checkout({ pricing, minimumOrderValue, cart, onClose, onDone, onOrderCreated, onAuthenticationRequired, user }: {
+  pricing: OrderPricing; minimumOrderValue: number; cart: CartLine[]; onClose: () => void; onDone: (order: OrderRecord) => void;
   onOrderCreated: (order: OrderRecord) => void; onAuthenticationRequired: () => void; user: AuthUser | null;
 }) {
   const [submitted, setSubmitted] = useState(false);
-  const [orderId] = useState(() => `AGS-${Math.floor(1000 + Math.random() * 8999)}`);
   const [orderRef, setOrderRef] = useState<OrderRecord | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cod');
+  const [codAvailable, setCodAvailable] = useState(true);
+  const [razorpayAvailable, setRazorpayAvailable] = useState(false);
+  const [availabilityLoading, setAvailabilityLoading] = useState(true);
+  const [onlineNote, setOnlineNote] = useState('');
+  const [paymentUncertain, setPaymentUncertain] = useState(false);
+  const [newOrderNotice, setNewOrderNotice] = useState('');
+  const pendingKey = `aggarwal-pending-order:${user?.email ?? 'guest'}`;
+  const checkoutPricing: OrderPricing = orderRef
+    ? orderRef.pricing ?? {
+        itemsSubtotal: orderRef.subtotal, discount: 0, gstPercent: 0, gst: 0,
+        deliveryCharge: 0, deliveryWaived: false, handlingCharge: 0, total: orderRef.subtotal,
+      }
+    : pricing;
+
+  useEffect(() => {
+    let active = true;
+    void fetch(`${API}/payments/availability`).then(r => r.ok ? r.json() : { razorpay: false, cod: true })
+      .then(data => {
+        if (!active) return;
+        setRazorpayAvailable(data.razorpay === true);
+        setCodAvailable(data.cod !== false);
+        if (data.cod === false) setPaymentMethod('razorpay');
+      })
+      .catch(() => { if (active) setRazorpayAvailable(false); })
+      .finally(() => { if (active) setAvailabilityLoading(false); });
+    try {
+      const saved = JSON.parse(localStorage.getItem(pendingKey) || 'null') as { order?: OrderRecord } | null;
+      if (saved?.order?.id) setOrderRef(normalizeOrder(saved.order));
+    } catch { /* ignore malformed retry pointer */ }
+    return () => { active = false; };
+  }, [pendingKey]);
+
+  const launchGateway = async (order: OrderRecord, gateway: RazorpayCheckout) => {
+    setSubmitting(true);
+    setSubmitError('');
+    setOnlineNote('');
+    setPaymentUncertain(false);
+    try {
+      await loadRazorpayCheckout();
+      if (!window.Razorpay) throw new Error('Secure checkout is unavailable in this browser.');
+      const instance = new window.Razorpay({
+        key: gateway.keyId, order_id: gateway.gatewayOrderId, amount: gateway.amountPaise,
+        currency: gateway.currency, name: 'Aggarwal Sweets', description: `Order ${order.id}`,
+        prefill: { name: order.customerName ?? '', email: order.customerEmail ?? '', contact: order.phone },
+        theme: { color: '#184f3e' },
+        handler: async (result: { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string }) => {
+          try {
+            const verified = await apiVerifyRazorpay(result);
+            if (verified.paymentStatus !== 'paid') throw new Error('Payment is not confirmed yet. Check My Orders before paying again.');
+            onOrderCreated(verified);
+            setOrderRef(verified);
+            localStorage.removeItem(pendingKey);
+            setSubmitted(true);
+          } catch (error) {
+            setPaymentUncertain(true);
+            setSubmitError(error instanceof Error ? error.message : 'Payment status is not confirmed. Check My Orders before paying again.');
+          } finally { setSubmitting(false); }
+        },
+        modal: { ondismiss: () => { setSubmitting(false); setOnlineNote('Payment not confirmed. Your order has been saved. Please check its status in My Orders before trying again to avoid a duplicate charge.'); } },
+      });
+      instance.open();
+    } catch (error) {
+      setSubmitting(false);
+      setSubmitError(error instanceof Error ? error.message : 'Could not open secure checkout.');
+    }
+  };
+
+  const startNewOrder = async () => {
+    if (!orderRef || submitting) return;
+    setSubmitting(true); setSubmitError(''); setNewOrderNotice('');
+    try {
+      // The server checks the existing gateway attempt before we release this local retry pointer.
+      const checked = await apiStartOrderCheckout(orderRef.id);
+      onOrderCreated(checked.order);
+      if (checked.alreadyPaid || checked.order.paymentStatus === 'paid') {
+        setOrderRef(checked.order);
+        setSubmitError('This order is already paid. Its status has been refreshed; do not place another order for these items.');
+        setPaymentUncertain(false);
+        return;
+      }
+      if (!checked.checkout) throw new Error('Payment may still be processing. Keep this saved order and check My Orders before starting a new one.');
+      localStorage.removeItem(pendingKey);
+      setOrderRef(null);
+      setPaymentUncertain(false);
+      setNewOrderNotice(`Order ${checked.order.id} remains in My Orders as pending. A new checkout will create a separate order.`);
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : 'Could not check the saved order status.');
+      setPaymentUncertain(true);
+    } finally { setSubmitting(false); }
+  };
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -2123,16 +2649,37 @@ function Checkout({ subtotal, cart, onClose, onDone, onOrderCreated, onAuthentic
     const customerName = (form.querySelector('#customer-name') as HTMLInputElement)?.value ?? '';
     const address = (form.querySelector('#customer-address') as HTMLTextAreaElement)?.value ?? '';
     const phone = (form.querySelector('#customer-phone') as HTMLInputElement)?.value ?? '';
-    const order: OrderRecord = {
-      id: orderId,
-      date: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+    if (orderRef?.paymentMethod === 'razorpay') {
+      try {
+        const resumed = await apiStartOrderCheckout(orderRef.id);
+        onOrderCreated(resumed.order);
+        if (resumed.alreadyPaid || resumed.order.paymentStatus === 'paid') {
+          localStorage.removeItem(pendingKey);
+          setOrderRef(resumed.order);
+          setSubmitted(true);
+        } else if (resumed.checkout) {
+          setOrderRef(resumed.order);
+          await launchGateway(resumed.order, resumed.checkout);
+        } else {
+          setSubmitError('Payment status is being checked. Visit My Orders before trying again.');
+          setPaymentUncertain(true);
+        }
+      } catch (error) {
+        setSubmitError(error instanceof Error ? error.message : 'Could not check this order payment.');
+        setPaymentUncertain(true);
+      } finally { setSubmitting(false); }
+      return;
+    }
+    const order: Omit<OrderRecord, 'id' | 'date'> = {
       items: cart,
-      subtotal,
+      subtotal: pricing.total,
+      pricing,
       status: 'Confirmed',
       address,
       phone,
       customerName,
       customerEmail: user?.role === 'customer' ? user.email : undefined,
+      paymentMethod,
     };
     const result = await apiSaveOrderToDb(order);
     if (!result.order) {
@@ -2144,6 +2691,17 @@ function Checkout({ subtotal, cart, onClose, onDone, onOrderCreated, onAuthentic
     const savedOrder = result.order;
     onOrderCreated(savedOrder);
     setOrderRef(savedOrder);
+    if (paymentMethod === 'razorpay') {
+      if (!result.checkout) {
+        setSubmitError('Your order is saved, but secure checkout details are unavailable. Check My Orders before proceeding.');
+        setPaymentUncertain(true);
+        setSubmitting(false);
+        return;
+      }
+      localStorage.setItem(pendingKey, JSON.stringify({ order: savedOrder }));
+      await launchGateway(savedOrder, result.checkout);
+      return;
+    }
     setSubmitted(true);
     setSubmitting(false);
   };
@@ -2156,8 +2714,9 @@ function Checkout({ subtotal, cart, onClose, onDone, onOrderCreated, onAuthentic
         <p className="mt-3 text-sm leading-6 text-muted-foreground">Our team will call you shortly to confirm delivery. Your sweets will leave our counter fresh.</p>
         <div className="mt-6 rounded-2xl bg-muted p-4 text-left text-xs space-y-2">
           <div className="flex justify-between"><span>Order reference</span><b className="font-mono-ui">{orderRef.id}</b></div>
-          <div className="flex justify-between"><span>Payment</span><b>Cash on delivery</b></div>
+          <div className="flex justify-between"><span>Payment</span><b>{orderRef.paymentMethod === 'razorpay' ? 'Paid online' : 'Cash on delivery'}</b></div>
           <div className="flex justify-between"><span>Items</span><b>{orderRef.items.reduce((s, l) => s + l.quantity, 0)} packs</b></div>
+          <div className="flex justify-between border-t border-border pt-2"><span>Order total</span><b>{money(orderRef.subtotal)}</b></div>
         </div>
         <Link href="/account" onClick={() => onDone(orderRef)} className="mt-4 flex items-center justify-center gap-2 text-xs font-bold text-secondary underline underline-offset-2">
           <ListOrdered className="size-3.5" /> View in My Orders
@@ -2173,34 +2732,70 @@ function Checkout({ subtotal, cart, onClose, onDone, onOrderCreated, onAuthentic
           <div>
             <p className="font-display text-2xl">Almost there</p>
             <p className="text-xs text-muted-foreground">We deliver across Sirsa and nearby areas</p>
+            {orderRef && <p className="mt-1 break-all text-[11px] font-semibold text-amber-800">Resuming saved order {orderRef.id} · {money(orderRef.subtotal)}</p>}
           </div>
           <button onClick={onClose} className="grid size-9 place-items-center rounded-full hover:bg-muted" aria-label="Close checkout" data-testid="button-close-checkout"><X className="size-5" /></button>
         </div>
         <form className="space-y-5 p-5 sm:p-8" onSubmit={handleSubmit} data-testid="form-checkout">
+          {!orderRef && <>
           <div>
             <label className="mb-2 block text-xs font-bold uppercase tracking-wider" htmlFor="customer-name">Your name</label>
-            <input id="customer-name" required className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-ring" placeholder="The person opening the box" data-testid="input-customer-name" />
+            <input id="customer-name" required={!orderRef} disabled={Boolean(orderRef)} className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-60" placeholder="The person opening the box" data-testid="input-customer-name" />
           </div>
           <div>
             <label className="mb-2 block text-xs font-bold uppercase tracking-wider" htmlFor="customer-phone">Phone number</label>
-            <input id="customer-phone" required type="tel" pattern="[0-9]{10}" className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-ring" placeholder="10 digit mobile number" data-testid="input-customer-phone" />
+            <input id="customer-phone" required={!orderRef} disabled={Boolean(orderRef)} type="tel" pattern="[0-9]{10}" className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-60" placeholder="10 digit mobile number" data-testid="input-customer-phone" />
           </div>
           <div>
             <label className="mb-2 block text-xs font-bold uppercase tracking-wider" htmlFor="customer-address">Delivery address</label>
-            <textarea id="customer-address" required rows={3} className="w-full resize-none rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-ring" placeholder="House number, street, landmark, Sirsa" data-testid="input-customer-address" />
+            <textarea id="customer-address" required={!orderRef} disabled={Boolean(orderRef)} rows={3} className="w-full resize-none rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-60" placeholder="House number, street, landmark, Sirsa" data-testid="input-customer-address" />
           </div>
           <div>
             <label className="mb-2 block text-xs font-bold uppercase tracking-wider" htmlFor="delivery-date">Preferred delivery date</label>
-            <input id="delivery-date" required type="date" min={new Date().toISOString().split('T')[0]} className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-ring" data-testid="input-delivery-date" />
+            <input id="delivery-date" required={!orderRef} disabled={Boolean(orderRef)} type="date" min={new Date().toISOString().split('T')[0]} className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-60" data-testid="input-delivery-date" />
           </div>
+          <div className="rounded-2xl border border-border bg-background p-4">
+            <p className="mb-3 text-xs font-bold uppercase tracking-wider">How would you like to pay?</p>
+            <div className="space-y-2">
+              {codAvailable && <label className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3 ${paymentMethod === 'cod' ? 'border-primary bg-primary/5' : 'border-border'}`}>
+                <input type="radio" name="payment-method" value="cod" checked={paymentMethod === 'cod'} disabled={availabilityLoading} onChange={() => setPaymentMethod('cod')} className="mt-1 accent-primary" />
+                <span><b className="block text-sm">Cash on delivery</b><span className="text-xs text-muted-foreground">Pay our delivery person when your order arrives.</span></span>
+              </label>}
+              <label className={`flex items-start gap-3 rounded-xl border p-3 ${razorpayAvailable ? 'cursor-pointer' : 'cursor-not-allowed opacity-55'} ${paymentMethod === 'razorpay' ? 'border-primary bg-primary/5' : 'border-border'}`}>
+                <input type="radio" name="payment-method" value="razorpay" checked={paymentMethod === 'razorpay'} disabled={!razorpayAvailable || availabilityLoading} onChange={() => setPaymentMethod('razorpay')} className="mt-1 accent-primary" />
+                <span><b className="block text-sm">Pay securely online</b><span className="text-xs text-muted-foreground">{availabilityLoading ? 'Checking availability…' : razorpayAvailable ? 'Cards, UPI and net banking via Razorpay.' : 'Online payment is temporarily unavailable.'}</span></span>
+              </label>
+              {!codAvailable && !razorpayAvailable && !availabilityLoading &&
+                <p role="status" className="rounded-xl bg-amber-50 p-3 text-xs text-amber-900">Ordering is temporarily unavailable. Please try again later.</p>}
+            </div>
+          </div>
+          </>}
           <div className="rounded-2xl bg-muted p-4">
-            <div className="flex justify-between text-sm"><span>Order total</span><b className="font-mono-ui">{money(subtotal)}</b></div>
-            <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground"><Banknote className="size-4 text-secondary" /> Cash on delivery · no advance payment</div>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between"><span>Items subtotal</span><span>{money(checkoutPricing.itemsSubtotal)}</span></div>
+              {checkoutPricing.discount > 0 && <div className="flex justify-between text-green-700"><span>Discount{checkoutPricing.couponCode ? ` (${checkoutPricing.couponCode})` : ''}</span><span>−{money(checkoutPricing.discount)}</span></div>}
+              {checkoutPricing.gst > 0 && <div className="flex justify-between"><span>GST ({checkoutPricing.gstPercent}%)</span><span>{money(checkoutPricing.gst)}</span></div>}
+              {(checkoutPricing.deliveryCharge > 0 || checkoutPricing.deliveryWaived) && <div className="flex justify-between"><span>{checkoutPricing.deliveryWaived ? 'Delivery charge · waived' : 'Delivery charge'}</span><span>{money(checkoutPricing.deliveryCharge)}</span></div>}
+              {checkoutPricing.handlingCharge > 0 && <div className="flex justify-between"><span>Handling charge</span><span>{money(checkoutPricing.handlingCharge)}</span></div>}
+              <div className="flex justify-between border-t border-border pt-2 font-bold"><span>Order total</span><b className="font-mono-ui">{money(checkoutPricing.total)}</b></div>
+            </div>
+            {!orderRef && minimumOrderValue > 0 && pricing.itemsSubtotal < minimumOrderValue &&
+              <p className="mt-2 text-xs font-semibold text-amber-800">The product subtotal must reach {money(minimumOrderValue)} before you can order.</p>}
+            <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground"><ShieldCheck className="size-4 text-secondary" /> {orderRef?.paymentMethod === 'razorpay' ? 'Saved order · secure payment status checked with the store' : paymentMethod === 'razorpay' ? 'Payment is confirmed only after server verification.' : 'Cash is collected at your door.'}</div>
           </div>
+          {newOrderNotice && <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs leading-5 text-amber-950" role="status">{newOrderNotice}</div>}
+          {onlineNote && <p className="rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-900">{onlineNote}</p>}
           {submitError && <p className="text-center text-xs font-semibold text-destructive">{submitError}</p>}
-          <button type="submit" disabled={submitting} className="flex w-full items-center justify-center gap-2 rounded-full bg-secondary py-4 text-sm font-bold text-secondary-foreground disabled:cursor-not-allowed disabled:opacity-60" data-testid="button-place-order">
-            {submitting ? <><Loader2 className="size-4 animate-spin" /> Saving order…</> : <>Place COD order <Check className="size-4" /></>}
+          {paymentUncertain && <p className="text-center text-xs text-muted-foreground">No new order has been created. Check My Orders or refresh this order status before attempting payment again.</p>}
+          <button type="submit" disabled={submitting || (!orderRef && (pricing.itemsSubtotal < minimumOrderValue || availabilityLoading || (paymentMethod === 'cod' ? !codAvailable : !razorpayAvailable)))} className="flex w-full items-center justify-center gap-2 rounded-full bg-secondary py-4 text-sm font-bold text-secondary-foreground disabled:cursor-not-allowed disabled:opacity-60" data-testid="button-place-order">
+            {submitting ? <><Loader2 className="size-4 animate-spin" /> {paymentMethod === 'razorpay' ? 'Checking secure payment…' : 'Saving order…'}</> : orderRef?.paymentMethod === 'razorpay' ? <>Check order & retry payment <ArrowRight className="size-4" /></> : !codAvailable && !razorpayAvailable ? <>Ordering temporarily unavailable</> : paymentMethod === 'razorpay' ? <>Continue to secure payment <ShieldCheck className="size-4" /></> : <>Place COD order <Check className="size-4" /></>}
           </button>
+          {orderRef?.paymentMethod === 'razorpay' && orderRef.paymentStatus !== 'paid' && orderRef.paymentStatus !== 'refunded' && <div className="rounded-xl border border-amber-300 bg-amber-50 p-4">
+            <p className="text-xs leading-5 text-amber-950">Starting a new order leaves this pending order in My Orders. We check the existing payment status first; do not start another order if payment may still be processing.</p>
+            <button type="button" disabled={submitting} onClick={() => void startNewOrder()} className="mt-3 min-h-10 rounded-full border border-amber-800 px-4 py-2 text-xs font-bold text-amber-950 disabled:opacity-50">
+              {submitting ? 'Checking saved order…' : 'Start a new order'}
+            </button>
+          </div>}
         </form>
       </div>
     </div>
@@ -2293,6 +2888,8 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
   const [section, setSection] = useState<AdminSection>('dashboard');
   const [catalog, setCatalog] = useState<Product[]>([]);
   const [orders, setOrders] = useState<OrderRecord[]>([]);
+  const [paymentRecords, setPaymentRecords] = useState<PaymentRecord[]>([]);
+  const [paymentLoadError, setPaymentLoadError] = useState('');
   const [customers, setCustomers] = useState<CustomerRecord[]>([]);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [dataLoading, setDataLoading] = useState(true);
@@ -2342,7 +2939,7 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
   const fetchAll = async () => {
     setDataLoading(true);
     try {
-      const [p, o, c, b, coupList, s, revList] = await Promise.all([
+      const [p, o, c, b, coupList, s, revList, paymentList] = await Promise.all([
         fetch(`${API}/products`).then(r => r.json()),
         fetch(`${API}/orders`, { cache: 'no-store' }).then(r => r.json()),
         fetch(`${API}/customers`, { cache: 'no-store' }).then(r => r.json()),
@@ -2350,12 +2947,21 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
         fetch(`${API}/coupons`).then(r => r.json()),
         fetch(`${API}/settings`).then(r => r.json()),
         fetch(`${API}/reviews/admin/all`).then(r => r.json()),
+        fetch(`${API}/payments`, { credentials: 'include', cache: 'no-store' }).then(async response => {
+          const body = await response.json().catch(() => []);
+          if (!response.ok) return { error: typeof body.error === 'string' ? body.error : 'Payment records are unavailable.' };
+          return body;
+        }),
       ]);
       setCatalog(Array.isArray(p) ? p : []);
       const nextOrders = Array.isArray(o) ? o.map(normalizeOrder).filter((order): order is OrderRecord => Boolean(order)) : [];
-      const nextIds = new Set(nextOrders.map(order => order.id));
+      // A pending online checkout is not a new fulfilment order. Alert only
+      // when COD is placed or an online payment becomes confirmed.
+      const confirmedOrders = nextOrders.filter(order =>
+        order.paymentMethod !== 'razorpay' || order.paymentStatus === 'paid');
+      const nextIds = new Set(confirmedOrders.map(order => order.id));
       if (previousOrderIds.current) {
-        const added = nextOrders.filter(order => !previousOrderIds.current?.has(order.id));
+        const added = confirmedOrders.filter(order => !previousOrderIds.current?.has(order.id));
         if (added.length) {
           setNewOrderCount(count => count + added.length);
           setOrderAlert(current => {
@@ -2371,6 +2977,8 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
       }
       previousOrderIds.current = nextIds;
       setOrders(nextOrders);
+      setPaymentRecords(Array.isArray(paymentList) ? paymentList : []);
+      setPaymentLoadError(!Array.isArray(paymentList) && typeof paymentList?.error === 'string' ? paymentList.error : '');
       setCustomers(Array.isArray(c) ? c : []);
       setBlogPosts(
         Array.isArray(b)
@@ -2394,10 +3002,12 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
     const refreshTimer = window.setInterval(fetchAll, 15_000);
     window.addEventListener('aggarwal-order-created', fetchAll);
     window.addEventListener('aggarwal-customer-updated', fetchAll);
+    window.addEventListener('aggarwal-settings-updated', fetchAll);
     return () => {
       window.clearInterval(refreshTimer);
       window.removeEventListener('aggarwal-order-created', fetchAll);
       window.removeEventListener('aggarwal-customer-updated', fetchAll);
+      window.removeEventListener('aggarwal-settings-updated', fetchAll);
     };
   }, []);
 
@@ -2405,12 +3015,18 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
 
   // Product CRUD
   const addProduct = async (product: Product) => {
-    await fetch(`${API}/products`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(product) });
+    const body = JSON.stringify(product);
+    checkImageSaveSize(body);
+    const response = await fetch(`${API}/products`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+    await requireImageSave(response, 'Saving the product');
     setCatalog(prev => [...prev, product]);
     window.dispatchEvent(new Event('aggarwal-catalog-updated'));
   };
   const editProduct = async (product: Product) => {
-    await fetch(`${API}/products/${product.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(product) });
+    const body = JSON.stringify(product);
+    checkImageSaveSize(body);
+    const response = await fetch(`${API}/products/${product.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body });
+    await requireImageSave(response, 'Saving the product');
     setCatalog(prev => prev.map(p => p.id === product.id ? product : p));
     window.dispatchEvent(new Event('aggarwal-catalog-updated'));
   };
@@ -2435,15 +3051,29 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
     return updated;
   };
 
+  const markCashReceived = async (id: string) => {
+    const response = await fetch(`${API}/payments/cod/${encodeURIComponent(id)}/received`, {
+      method: 'PUT', credentials: 'include',
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error ?? 'Could not mark cash received.');
+    const order = normalizeOrder(data);
+    if (order) setOrders(current => current.map(item => item.id === id ? order : item));
+    await fetchAll();
+  };
+
   const navItems: { key: AdminSection; icon: typeof LayoutDashboard; label: string }[] = [
     { key: 'dashboard',  icon: LayoutDashboard, label: 'Dashboard' },
     { key: 'products',   icon: Package,         label: 'Products' },
     { key: 'categories', icon: LayoutList,      label: 'Categories' },
     { key: 'orders',     icon: ShoppingBag,     label: 'Orders' },
+    { key: 'payments',   icon: Banknote,        label: 'Payments' },
+    { key: 'other-records', icon: FileSpreadsheet, label: 'Other records' },
     { key: 'customers',  icon: Users,           label: 'Customers' },
     { key: 'blog',       icon: FileText,        label: 'Blog' },
     { key: 'coupons',    icon: Tag,             label: 'Coupons' },
     { key: 'reviews',    icon: MessageCircle,   label: 'Reviews' },
+    { key: 'additional', icon: SlidersHorizontal, label: 'Additional settings' },
     { key: 'settings',   icon: Settings,        label: 'Settings' },
   ];
 
@@ -2493,7 +3123,7 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
           <div className="grid size-9 place-items-center rounded-full border-2 border-accent text-accent"><Sparkles className="size-4" /></div>
           <div><div className="font-display text-base text-primary-foreground">Aggarwal</div><div className="font-mono-ui text-[8px] uppercase tracking-widest text-accent">Admin portal</div></div>
         </div>
-        <nav className="flex-1 space-y-1 p-3">
+        <nav className="flex-1 space-y-1 overflow-y-auto p-3">
           {navItems.map(({ key, icon: Icon, label }) => (
             <button key={key} onClick={() => navigate(key)}
               className={`flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-semibold transition-colors ${section === key ? 'bg-accent text-accent-foreground' : 'text-primary-foreground/60 hover:bg-primary-foreground/10 hover:text-primary-foreground'}`}
@@ -2521,7 +3151,7 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
               <Menu className="size-4" />
             </button>
             <div>
-              <h1 className="font-display text-lg capitalize text-primary-foreground">{section}</h1>
+              <h1 className="font-display text-lg capitalize text-primary-foreground">{section === 'other-records' ? 'Other records' : section}</h1>
               <p className="hidden text-xs text-primary-foreground/45 sm:block">Welcome back, {adminUser.name ?? adminUser.email}</p>
             </div>
           </div>
@@ -2577,7 +3207,7 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
                 <span className="font-display text-lg text-primary-foreground">Menu</span>
                 <button onClick={() => setMobileNavOpen(false)} className="text-primary-foreground/60"><X className="size-5" /></button>
               </div>
-              <nav className="flex-1 space-y-1 p-3">
+              <nav className="flex-1 space-y-1 overflow-y-auto p-3">
                 {navItems.map(({ key, icon: Icon, label }) => (
                   <button key={key} onClick={() => navigate(key)}
                     className={`flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-semibold transition-colors ${section === key ? 'bg-accent text-accent-foreground' : 'text-primary-foreground/60 hover:bg-primary-foreground/10 hover:text-primary-foreground'}`}>
@@ -2602,11 +3232,14 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
           {section === 'dashboard' && <AdminSectionDashboard catalog={catalog} orders={orders} customers={customers} onNavigate={setSection} />}
           {section === 'products'  && <AdminSectionProducts  catalog={catalog} loading={dataLoading} onAdd={addProduct} onEdit={editProduct} onDelete={deleteProduct} />}
           {section === 'orders'    && <AdminSectionOrders    orders={orders}   loading={dataLoading} onStatusChange={updateOrderStatus} />}
+          {section === 'payments' && <AdminSectionPayments payments={paymentRecords} orders={orders} loading={dataLoading} loadError={paymentLoadError} onMarkCashReceived={markCashReceived} />}
+          {section === 'other-records' && <AdminSectionOtherRecords orders={orders} payments={paymentRecords} loading={dataLoading} paymentLoadError={paymentLoadError} />}
           {section === 'customers'  && <AdminSectionCustomers customers={customers} />}
           {section === 'categories' && <AdminSectionCategories onRefresh={fetchAll} />}
           {section === 'blog'       && <AdminSectionBlog      posts={blogPosts} onRefresh={fetchAll} />}
           {section === 'coupons'   && <AdminSectionCoupons   coupons={coupons} onRefresh={fetchAll} />}
           {section === 'reviews'   && <AdminSectionReviews   reviews={adminReviews} catalog={catalog} onRefresh={fetchAll} />}
+          {section === 'additional' && <AdminAdditionalSettings />}
           {section === 'settings'  && <AdminSectionSettings  adminUser={adminUser} />}
         </main>
       </div>
@@ -2616,11 +3249,463 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
 }
 
 // ─── Admin · Dashboard ────────────────────────────────────────────────────────
+function AdminOrderDetailsPanel({ order, customer }: { order: OrderRecord; customer?: CustomerRecord }) {
+  return (
+    <div className="space-y-5 border-t border-border bg-muted/30 px-5 py-4">
+      <div className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+        <div><span className="block text-xs text-muted-foreground">Order date</span><b>{formatOrderDate(order.date)}</b></div>
+        <div><span className="block text-xs text-muted-foreground">Order status</span><b>{ORDER_STATUSES[order.status].label}</b></div>
+        <div><span className="block text-xs text-muted-foreground">Payment method</span><b>{order.paymentMethod === 'razorpay' ? 'Razorpay' : 'Cash on delivery'}</b></div>
+        <div><span className="block text-xs text-muted-foreground">Payment status</span><b className="capitalize">{order.paymentStatus ?? 'pending'}</b></div>
+      </div>
+      <div>
+        <p className="mb-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">Customer details</p>
+        <div className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
+          <div><span className="block text-xs text-muted-foreground">Name</span><b>{order.customerName || customer?.name || 'Not provided'}</b></div>
+          <div>
+            <span className="block text-xs text-muted-foreground">Email</span>
+            {order.customerEmail
+              ? <a className="break-all font-semibold text-secondary hover:underline" href={`mailto:${order.customerEmail}`}>{order.customerEmail}</a>
+              : <b className="break-all">{customer?.email || 'Not provided'}</b>}
+          </div>
+          <div>
+            <span className="block text-xs text-muted-foreground">Phone</span>
+            {order.phone
+              ? <a className="font-semibold text-secondary hover:underline" href={`tel:${order.phone}`}>{order.phone}</a>
+              : <b>{customer?.phone || 'Not provided'}</b>}
+          </div>
+          {customer && <>
+            <div><span className="block text-xs text-muted-foreground">Customer since</span><b>{customer.joinedAt ? new Date(customer.joinedAt).toLocaleDateString('en-IN') : '—'}</b></div>
+            <div><span className="block text-xs text-muted-foreground">Orders · lifetime spend</span><b>{customer.orderCount ?? 0} · {money(customer.totalSpent ?? 0)}</b></div>
+          </>}
+        </div>
+      </div>
+
+      <div>
+        <p className="mb-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">Delivery address</p>
+        <p className="text-sm">{order.address || customer?.address || 'Address not provided'}</p>
+        {customer?.address && customer.address !== order.address && (
+          <p className="mt-1 text-xs text-muted-foreground">Customer profile address: {customer.address}</p>
+        )}
+      </div>
+
+      {(order.receiverName || order.deliveryContact || order.deliveryRemarks) && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-950">
+          <p className="mb-3 text-xs font-bold uppercase tracking-wider text-emerald-700">Delivery completion</p>
+          <div className="grid gap-3 text-sm sm:grid-cols-2">
+            <div><span className="block text-xs text-emerald-700">Received by</span><b>{order.receiverName || '—'}</b></div>
+            <div><span className="block text-xs text-emerald-700">Receiver contact</span><b>{order.deliveryContact || '—'}</b></div>
+            <div className="sm:col-span-2"><span className="block text-xs text-emerald-700">Remarks</span><p>{order.deliveryRemarks || '—'}</p></div>
+          </div>
+        </div>
+      )}
+
+      <div>
+        <p className="mb-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">Products in this order</p>
+        <div className="space-y-2">
+          {order.items.map((line, index) => {
+            const product = line.product;
+            const unitPrice = line.variant?.price ?? product?.price ?? 0;
+            return (
+              <article key={`${product?.id ?? 'item'}-${index}`} className="flex flex-col gap-3 rounded-xl border border-border bg-background px-4 py-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex min-w-0 gap-3">
+                  <img src={product?.image ?? '/hero-mithai.jpg'} className="size-14 shrink-0 rounded-lg object-cover" alt={product?.name ?? 'Order item'} />
+                  <div className="min-w-0">
+                    <p className="font-semibold">{product?.name ?? 'Order item'}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {product?.category ?? 'Category unavailable'} · {line.variant ? variantLabel(line.variant) : product?.unit ?? 'Standard'}
+                    </p>
+                    {product?.description && <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">{product.description}</p>}
+                    <p className="mt-1 text-xs text-muted-foreground">{money(unitPrice)} each · quantity {line.quantity}</p>
+                  </div>
+                </div>
+                <p className="shrink-0 text-sm font-bold">{money(unitPrice * line.quantity)}</p>
+              </article>
+            );
+          })}
+        </div>
+      </div>
+
+      {order.pricing && (
+        <div className="rounded-xl border border-border bg-background p-4">
+          <p className="mb-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">Price details</p>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between gap-4"><span>Items subtotal</span><span>{money(order.pricing.itemsSubtotal)}</span></div>
+            {order.pricing.discount > 0 && <div className="flex justify-between gap-4 text-green-700"><span>Discount{order.pricing.couponCode ? ` (${order.pricing.couponCode})` : ''}</span><span>−{money(order.pricing.discount)}</span></div>}
+            {order.pricing.gst > 0 && <div className="flex justify-between gap-4"><span>GST ({order.pricing.gstPercent}%)</span><span>{money(order.pricing.gst)}</span></div>}
+            {(order.pricing.deliveryCharge > 0 || order.pricing.deliveryWaived) && <div className="flex justify-between gap-4"><span>{order.pricing.deliveryWaived ? 'Delivery charge · waived' : 'Delivery charge'}</span><span>{money(order.pricing.deliveryCharge)}</span></div>}
+            {order.pricing.handlingCharge > 0 && <div className="flex justify-between gap-4"><span>Handling charge</span><span>{money(order.pricing.handlingCharge)}</span></div>}
+            <div className="flex justify-between gap-4 border-t border-border pt-2 font-bold"><span>Order total</span><span>{money(order.pricing.total)}</span></div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AdminSectionPayments({ payments, orders, loading, loadError, onMarkCashReceived }: {
+  payments: PaymentRecord[]; orders: OrderRecord[]; loading: boolean; loadError: string;
+  onMarkCashReceived: (id: string) => Promise<void>;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const [pdfDownloading, setPdfDownloading] = useState(false);
+  const [exportError, setExportError] = useState('');
+  const orderById = useMemo(() => new Map(orders.map(order => [order.id, order])), [orders]);
+  const paymentReport: AdminTableReport = {
+    title: 'Aggarwal Sweets payment report',
+    summary: [
+      `Payment records: ${payments.length}`,
+      'Includes gateway attempts and recorded cash-on-delivery collections.',
+    ],
+    headers: ['Record ID', 'Order ID', 'Created', 'Customer email', 'Method', 'Payment status', 'Amount', 'Refunded', 'Currency', 'Gateway payment ID', 'Failure reason'],
+    rows: payments.map(payment => [
+      payment.id,
+      payment.orderId,
+      formatOrderDate(payment.createdAt),
+      payment.customerEmail,
+      payment.method === 'razorpay' ? 'Razorpay' : 'Cash on delivery',
+      paymentStatusLabel(payment.status),
+      money(payment.amountPaise / 100),
+      money(payment.refundedPaise / 100),
+      payment.currency,
+      payment.gatewayPaymentId || 'Not assigned',
+      payment.failureReason || '—',
+    ]),
+  };
+  const downloadPaymentsExcel = () => {
+    setExportError('');
+    downloadAdminExcelReport(paymentReport, `payments-${new Date().toISOString().slice(0, 10)}.xls`);
+  };
+  const downloadPaymentsPdf = async () => {
+    setPdfDownloading(true);
+    setExportError('');
+    try {
+      const blob = await fetchAdminReportPdf(paymentReport);
+      downloadReportFile(blob, `payments-${new Date().toISOString().slice(0, 10)}.pdf`);
+    } catch (reason) {
+      setExportError(reason instanceof Error ? reason.message : 'Could not download the payment PDF.');
+    } finally {
+      setPdfDownloading(false);
+    }
+  };
+  const markReceived = async (orderId: string) => {
+    setBusy(orderId); setError('');
+    try { await onMarkCashReceived(orderId); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not update cash collection.'); }
+    finally { setBusy(null); }
+  };
+  return <section className="space-y-4">
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div>
+        <h2 className="font-display text-2xl">Payment records</h2>
+        <p className="mt-1 text-sm text-muted-foreground">Gateway attempts and cash collection recorded against each order.</p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" onClick={downloadPaymentsExcel} disabled={loading}
+          className="inline-flex items-center gap-2 rounded-xl border border-border bg-background px-3 py-2 text-xs font-bold hover:bg-muted disabled:opacity-60">
+          <FileSpreadsheet className="size-3.5 text-emerald-600" /> Excel
+        </button>
+        <button type="button" onClick={() => void downloadPaymentsPdf()} disabled={loading || pdfDownloading}
+          className="inline-flex items-center gap-2 rounded-xl bg-primary px-3 py-2 text-xs font-bold text-primary-foreground hover:opacity-90 disabled:opacity-60">
+          <Download className="size-3.5" /> {pdfDownloading ? 'Preparing PDF…' : 'Download PDF'}
+        </button>
+      </div>
+    </div>
+    {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">{error}</p>}
+    {loadError && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">{loadError}</p>}
+    {exportError && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">{exportError}</p>}
+    {loading ? <div className="space-y-3">{[0, 1, 2].map(item => <div key={item} className="h-24 animate-pulse rounded-2xl bg-muted" />)}</div>
+      : payments.length === 0 ? <div className="rounded-2xl border border-border bg-background p-10 text-center">
+        <Banknote className="mx-auto size-8 text-muted-foreground/50" /><p className="mt-3 font-semibold">No payment records yet</p>
+        <p className="mt-1 text-sm text-muted-foreground">Payment attempts and delivery cash collection will appear here.</p>
+      </div> : <div className="space-y-3">{payments.map(payment => {
+        const order = orderById.get(payment.orderId);
+        const canMarkCash = payment.method === 'cod' && payment.status !== 'received' && order?.status === 'Delivered';
+        return <article key={payment.id} className="rounded-2xl border border-border bg-background p-4 shadow-sm sm:p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <p className="font-mono-ui break-all text-xs font-bold">{payment.orderId}</p>
+              <p className="mt-1 break-all text-xs text-muted-foreground">{payment.customerEmail}</p>
+              <p className="mt-2 text-xs text-muted-foreground">{formatOrderDate(payment.createdAt)} · {payment.method === 'razorpay' ? 'Razorpay' : 'Cash on delivery'}</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${paymentBadgeClass(payment.status)}`}>{paymentStatusLabel(payment.status)}</span>
+              <b className="font-mono-ui text-sm">{money(payment.amountPaise / 100)}</b>
+            </div>
+          </div>
+          <div className="mt-3 grid gap-2 border-t border-border pt-3 text-xs sm:grid-cols-2">
+            <p className="break-all"><span className="text-muted-foreground">Record ID </span><span className="font-mono-ui">{payment.id}</span></p>
+            <p className="break-all"><span className="text-muted-foreground">Gateway payment </span><span className="font-mono-ui">{payment.gatewayPaymentId || 'Not assigned'}</span></p>
+            {payment.refundedPaise > 0 && <p><span className="text-muted-foreground">Refunded </span>{money(payment.refundedPaise / 100)}</p>}
+            {payment.failureReason && <p className="break-words text-destructive sm:col-span-2">{payment.failureReason}</p>}
+          </div>
+          {canMarkCash && <button type="button" disabled={busy === payment.orderId} onClick={() => void markReceived(payment.orderId)}
+            className="mt-4 inline-flex min-h-10 items-center gap-2 rounded-full bg-primary px-4 py-2 text-xs font-bold text-primary-foreground disabled:opacity-60">
+            {busy === payment.orderId ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+            Mark delivered COD cash received
+          </button>}
+        </article>;
+      })}</div>}
+    {!loading && orders.filter(order => order.paymentMethod === 'cod' && order.paymentStatus !== 'paid' && order.status === 'Delivered' &&
+      !payments.some(payment => payment.orderId === order.id && payment.method === 'cod')).map(order => (
+      <article key={`historical-${order.id}`} className="flex flex-col gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div><p className="font-mono-ui text-xs font-bold">{order.id}</p><p className="mt-1 text-xs text-amber-900">Delivered COD order without a recorded cash collection.</p></div>
+        <button type="button" disabled={busy === order.id} onClick={() => void markReceived(order.id)} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-full bg-primary px-4 py-2 text-xs font-bold text-primary-foreground disabled:opacity-60">
+          {busy === order.id ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />} Mark cash received
+        </button>
+      </article>
+    ))}
+  </section>;
+}
+
+function AdminSectionOtherRecords({ orders, payments, loading, paymentLoadError }: {
+  orders: OrderRecord[];
+  payments: PaymentRecord[];
+  loading: boolean;
+  paymentLoadError: string;
+}) {
+  type ChargeTab = 'gst' | 'delivery' | 'handling';
+  const tabs: { key: ChargeTab; label: string; title: string; getAmount: (order: OrderRecord) => number | undefined }[] = [
+    { key: 'gst', label: 'Total GST Collected', title: 'GST collected report', getAmount: order => order.pricing?.gst },
+    { key: 'delivery', label: 'Total Delivery Charge Collected', title: 'Delivery charge collected report', getAmount: order => order.pricing?.deliveryCharge },
+    { key: 'handling', label: 'Total Handling Charge Collected', title: 'Handling charge collected report', getAmount: order => order.pricing?.handlingCharge },
+  ];
+  const [activeTab, setActiveTab] = useState<ChargeTab>('gst');
+  const [reportPreset, setReportPreset] = useState<'today' | 'week' | 'month' | 'quarter' | 'year' | 'custom'>('today');
+  const [fromDate, setFromDate] = useState(new Date().toISOString().slice(0, 10));
+  const [toDate, setToDate] = useState(new Date().toISOString().slice(0, 10));
+  const [reportCategory, setReportCategory] = useState('All');
+  const [reportStatus, setReportStatus] = useState<OrderStatus | 'All'>('All');
+  const [pdfDownloading, setPdfDownloading] = useState(false);
+  const [exportError, setExportError] = useState('');
+
+  const getPresetRange = (preset: typeof reportPreset) => {
+    const end = new Date();
+    const start = new Date(end);
+    if (preset === 'today') start.setHours(0, 0, 0, 0);
+    if (preset === 'week') start.setDate(end.getDate() - 6);
+    if (preset === 'month') start.setDate(end.getDate() - 29);
+    if (preset === 'quarter') start.setDate(end.getDate() - 89);
+    if (preset === 'year') start.setDate(end.getDate() - 364);
+    return { from: start.toISOString().slice(0, 10), to: end.toISOString().slice(0, 10) };
+  };
+  const applyPreset = (preset: typeof reportPreset) => {
+    setReportPreset(preset);
+    if (preset !== 'custom') {
+      const range = getPresetRange(preset);
+      setFromDate(range.from);
+      setToDate(range.to);
+    }
+  };
+  const orderDay = (date: string) => {
+    const parsed = new Date(date);
+    return Number.isNaN(parsed.getTime())
+      ? date.slice(0, 10)
+      : new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(parsed);
+  };
+  const categories = Array.from(new Set(orders.flatMap(order =>
+    order.items.map(line => line.product?.category).filter(Boolean) as string[]
+  ))).sort();
+  const filteredOrders = orders.filter(order => {
+    const day = orderDay(order.date);
+    const categoryMatches = reportCategory === 'All' || order.items.some(line => line.product?.category === reportCategory);
+    return day >= fromDate && day <= toDate &&
+      (reportStatus === 'All' || order.status === reportStatus) && categoryMatches;
+  });
+  const partialRefundOrderIds = new Set(payments
+    .filter(payment => payment.status === 'partially_refunded')
+    .map(payment => payment.orderId));
+  const excludedPartialRefundCount = filteredOrders.filter(order =>
+    order.paymentStatus === 'paid' && partialRefundOrderIds.has(order.id)
+  ).length;
+  const collectedOrders = paymentLoadError ? [] : filteredOrders.filter(order =>
+    order.paymentStatus === 'paid' && !partialRefundOrderIds.has(order.id)
+  );
+  const selectedTab = tabs.find(tab => tab.key === activeTab) ?? tabs[0];
+  const collectionRows = collectedOrders.map(order => {
+    const rawAmount = selectedTab.getAmount(order);
+    const amount = typeof rawAmount === 'number' && Number.isFinite(rawAmount) && rawAmount > 0 ? rawAmount : 0;
+    return { order, amount };
+  }).filter(row => row.amount > 0);
+  const collectedTotal = collectionRows.reduce((sum, row) => sum + row.amount, 0);
+  const reportTitle = `Aggarwal Sweets ${selectedTab.title}`;
+  const reportFilename = `${activeTab}-collected-${fromDate}-to-${toDate}`;
+  const summaryLines = [
+    `Date range: ${fromDate} to ${toDate}`,
+    `Filters: status ${reportStatus}; category ${reportCategory}`,
+    `Paid orders with this charge: ${collectionRows.length}; total: ${money(collectedTotal)}`,
+    `Partially refunded orders excluded: ${excludedPartialRefundCount}`,
+  ];
+  const reportData: AdminTableReport = {
+    title: reportTitle,
+    summary: summaryLines,
+    headers: ['Order ID', 'Date', 'Status', 'Customer', 'Items', 'Payment method', 'Amount collected'],
+    rows: collectionRows.map(({ order, amount }) => [
+      order.id,
+      formatOrderDate(order.date),
+      order.status,
+      order.customerName || order.customerEmail || order.phone || 'Customer',
+      order.items.map(line => `${line.product?.name ?? 'Order item'}${line.product?.category ? ` (${line.product.category})` : ''}${line.variant ? ` · ${variantLabel(line.variant)}` : ''}`).join('\n') || '—',
+      order.paymentMethod === 'razorpay' ? 'Razorpay' : 'Cash on delivery',
+      money(amount),
+    ]),
+  };
+  const downloadExcel = () => {
+    setExportError('');
+    downloadAdminExcelReport(reportData, `${reportFilename}.xls`);
+  };
+  const downloadPdf = async () => {
+    setPdfDownloading(true);
+    setExportError('');
+    try {
+      const blob = await fetchAdminReportPdf(reportData);
+      downloadReportFile(blob, `${reportFilename}.pdf`);
+    } catch (reason) {
+      setExportError(reason instanceof Error ? reason.message : 'Could not download the collection PDF.');
+    } finally {
+      setPdfDownloading(false);
+    }
+  };
+
+  return (
+    <section className="space-y-5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="font-display text-2xl">Other records</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Collected order charges from saved order pricing records.</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={downloadExcel} disabled={loading || Boolean(paymentLoadError)}
+            className="inline-flex items-center gap-2 rounded-xl border border-border bg-background px-3 py-2 text-xs font-bold hover:bg-muted disabled:opacity-60">
+            <FileSpreadsheet className="size-3.5 text-emerald-600" /> Excel
+          </button>
+          <button type="button" onClick={() => void downloadPdf()} disabled={loading || Boolean(paymentLoadError) || pdfDownloading}
+            className="inline-flex items-center gap-2 rounded-xl bg-primary px-3 py-2 text-xs font-bold text-primary-foreground hover:opacity-90 disabled:opacity-60">
+            <Download className="size-3.5" /> {pdfDownloading ? 'Preparing PDF…' : 'Download PDF'}
+          </button>
+        </div>
+      </div>
+
+      <div role="tablist" aria-label="Collected charge reports" className="grid gap-2 sm:grid-cols-3">
+        {tabs.map(tab => (
+          <button key={tab.key} type="button" role="tab" aria-selected={activeTab === tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            className={`rounded-xl border px-4 py-3 text-left text-sm font-bold transition-colors ${activeTab === tab.key ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background hover:bg-muted'}`}>
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-950">
+        Only orders marked paid are included. COD orders count after cash is marked received.
+      </div>
+      {paymentLoadError && <p role="alert" className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">Payment records are unavailable, so collection reports are paused. Refresh the admin dashboard and try again.</p>}
+      {exportError && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">{exportError}</p>}
+
+      <div className="rounded-2xl border border-border bg-background p-5 shadow-sm">
+        <div className="flex flex-wrap gap-2">
+          {([
+            ['today', 'Today'], ['week', 'Last week'], ['month', 'Last month'],
+            ['quarter', 'Last quarter'], ['year', 'Last year'], ['custom', 'Custom range'],
+          ] as const).map(([value, label]) => (
+            <button key={value} type="button" onClick={() => applyPreset(value)}
+              className={`rounded-full px-3 py-1.5 text-xs font-bold ${reportPreset === value ? 'bg-primary text-primary-foreground' : 'border border-border hover:bg-muted'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <label className="text-xs font-bold text-muted-foreground">From
+            <input type="date" value={fromDate} onChange={event => { setFromDate(event.target.value); setReportPreset('custom'); }}
+              className="mt-1 block w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground" />
+          </label>
+          <label className="text-xs font-bold text-muted-foreground">To
+            <input type="date" value={toDate} onChange={event => { setToDate(event.target.value); setReportPreset('custom'); }}
+              className="mt-1 block w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground" />
+          </label>
+          <label className="text-xs font-bold text-muted-foreground">Order status
+            <select value={reportStatus} onChange={event => setReportStatus(event.target.value as OrderStatus | 'All')}
+              className="mt-1 block w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground">
+              <option value="All">All statuses</option>
+              {(['Awaiting payment', 'Payment failed', 'Confirmed', 'Packing', 'Out for delivery', 'Delivered'] as OrderStatus[]).map(status =>
+                <option key={status} value={status}>{status}</option>
+              )}
+            </select>
+          </label>
+          <label className="text-xs font-bold text-muted-foreground">Category
+            <select value={reportCategory} onChange={event => setReportCategory(event.target.value)}
+              className="mt-1 block w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground">
+              <option value="All">All categories</option>
+              {categories.map(category => <option key={category} value={category}>{category}</option>)}
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-3">
+        <div className="rounded-2xl border border-border bg-background p-5 shadow-sm">
+          <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">{selectedTab.label}</p>
+          <p className="mt-2 font-display text-3xl">{money(collectedTotal)}</p>
+          <p className="mt-1 text-xs text-muted-foreground">From {collectionRows.length} paid order{collectionRows.length === 1 ? '' : 's'}</p>
+        </div>
+        <div className="rounded-2xl border border-border bg-background p-5 shadow-sm">
+          <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Paid orders in filters</p>
+          <p className="mt-2 font-display text-3xl">{collectedOrders.length}</p>
+          <p className="mt-1 text-xs text-muted-foreground">Unpaid, failed, and fully refunded orders are excluded</p>
+        </div>
+        <div className="rounded-2xl border border-border bg-background p-5 shadow-sm">
+          <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Partial refunds excluded</p>
+          <p className="mt-2 font-display text-3xl">{excludedPartialRefundCount}</p>
+          <p className="mt-1 text-xs text-muted-foreground">Excluded from collected-charge totals</p>
+        </div>
+      </div>
+
+      <div className="overflow-hidden rounded-2xl border border-border bg-background shadow-sm">
+        <div className="border-b border-border px-5 py-4">
+          <h3 className="font-semibold">{selectedTab.label}</h3>
+          <p className="mt-1 text-xs text-muted-foreground">{collectionRows.length} order{collectionRows.length === 1 ? '' : 's'} · {fromDate} to {toDate}</p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[760px] text-left text-sm">
+            <thead className="bg-muted/60 text-xs text-muted-foreground">
+              <tr>{['Order ID', 'Date', 'Status', 'Customer', 'Items', 'Payment method', 'Amount collected'].map(header =>
+                <th key={header} className="px-4 py-3 font-bold">{header}</th>
+              )}</tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {collectionRows.map(({ order, amount }) => (
+                <tr key={order.id}>
+                  <td className="px-4 py-3 font-mono-ui text-xs font-bold">{order.id}</td>
+                  <td className="whitespace-nowrap px-4 py-3 text-xs">{formatOrderDate(order.date)}</td>
+                  <td className="px-4 py-3 text-xs">{order.status}</td>
+                  <td className="max-w-48 truncate px-4 py-3 text-xs">{order.customerName || order.customerEmail || order.phone}</td>
+                  <td className="max-w-72 whitespace-pre-line px-4 py-3 text-xs">{order.items.map(line =>
+                    `${line.product?.name ?? 'Order item'}${line.variant ? ` · ${variantLabel(line.variant)}` : ''}`
+                  ).join('\n') || '—'}</td>
+                  <td className="whitespace-nowrap px-4 py-3 text-xs">{order.paymentMethod === 'razorpay' ? 'Razorpay' : 'Cash on delivery'}</td>
+                  <td className="whitespace-nowrap px-4 py-3 text-right font-bold">{money(amount)}</td>
+                </tr>
+              ))}
+              {!collectionRows.length && (
+                <tr><td colSpan={7} className="px-4 py-12 text-center text-sm text-muted-foreground">
+                  {loading ? 'Loading collected charges…' : 'No collected charges match these filters.'}
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function AdminSectionDashboard({ catalog, orders, customers, onNavigate }: {
   catalog: Product[]; orders: OrderRecord[]; customers: CustomerRecord[];
   onNavigate: (s: AdminSection) => void;
 }) {
-  const totalRevenue = orders.reduce((s, o) => s + o.subtotal, 0);
+  const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
+  const totalRevenue = orders.filter(order => order.paymentMethod !== 'razorpay' || order.paymentStatus === 'paid').reduce((s, o) => s + o.subtotal, 0);
   const activeOrders = orders.filter(o => o.status !== 'Delivered').length;
 
   const stats = [
@@ -2659,18 +3744,39 @@ function AdminSectionDashboard({ catalog, orders, customers, onNavigate }: {
             </div>
           ) : (
             <div className="divide-y divide-border">
-              {orders.slice(0, 7).map(order => (
-                <div key={order.id} className="flex items-center justify-between px-5 py-3.5">
-                  <div>
-                    <p className="text-sm font-semibold">{order.id}</p>
-                    <p className="text-xs text-muted-foreground">{order.date} · {order.items.length} item{order.items.length !== 1 ? 's' : ''} · {order.phone}</p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <p className="text-sm font-bold">{money(order.subtotal)}</p>
-                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold whitespace-nowrap ${ORDER_STATUSES[order.status].color}`}>{ORDER_STATUSES[order.status].label}</span>
-                  </div>
-                </div>
-              ))}
+              {orders.slice(0, 7).map(order => {
+                const expanded = expandedOrderId === order.id;
+                const orderPhone = order.phone.replace(/\D/g, '');
+                const customer = customers.find(record =>
+                  (Boolean(order.customerEmail) && record.email.toLowerCase() === order.customerEmail?.toLowerCase()) ||
+                  (Boolean(orderPhone) && Boolean(record.phone) && record.phone!.replace(/\D/g, '') === orderPhone)
+                );
+                return (
+                  <article key={order.id}>
+                    <button type="button" onClick={() => setExpandedOrderId(expanded ? null : order.id)}
+                      aria-expanded={expanded} aria-controls={`dashboard-order-details-${order.id}`}
+                      className="flex w-full items-center justify-between gap-4 px-5 py-3.5 text-left transition-colors hover:bg-muted/30">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold">{order.id}</p>
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          {order.customerName || order.customerEmail || 'Customer'} · {formatOrderDate(order.date)} · {order.items.length} item{order.items.length !== 1 ? 's' : ''}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+                        <p className="text-sm font-bold">{money(order.subtotal)}</p>
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold whitespace-nowrap ${ORDER_STATUSES[order.status].color}`}>{ORDER_STATUSES[order.status].label}</span>
+                        <span className="text-[10px] font-bold text-secondary">{expanded ? 'Hide details' : 'Details'}</span>
+                        <ChevronDown className={`size-4 text-muted-foreground transition-transform ${expanded ? 'rotate-180' : ''}`} />
+                      </div>
+                    </button>
+                    {expanded && (
+                      <div id={`dashboard-order-details-${order.id}`}>
+                        <AdminOrderDetailsPanel order={order} customer={customer} />
+                      </div>
+                    )}
+                  </article>
+                );
+              })}
             </div>
           )}
         </div>
@@ -2705,11 +3811,12 @@ function AdminSectionDashboard({ catalog, orders, customers, onNavigate }: {
 type ProductFormData = {
   name: string; category: string; price: string; unit: string;
   badge: string; description: string; image: string;
+  active: boolean; schedule: AvailabilityWindow[] | null;
   v1w: string; v1p: string; v2w: string; v2p: string; v3w: string; v3p: string;
 };
 const BLANK_FORM: ProductFormData = {
   name: '', category: 'Mithai', price: '', unit: '250 gm',
-  badge: '', description: '', image: '/hero-mithai.jpg',
+  badge: '', description: '', image: '/hero-mithai.jpg', active: true, schedule: null,
   v1w: '250 gm', v1p: '', v2w: '500 gm', v2p: '', v3w: '1 kg', v3p: '',
 };
 
@@ -2735,12 +3842,17 @@ function AdminSectionProducts({ catalog, loading, onAdd, onEdit, onDelete }: {
   })();
   const allCats = ['All', ...dynamicCats];
   const [imageTab, setImageTab] = useState<'url' | 'upload'>('url');
+  const [imageError, setImageError] = useState('');
+  const [saveError, setSaveError] = useState('');
+  const [imageLoading, setImageLoading] = useState(false);
 
-  const openAdd = () => { setForm(BLANK_FORM); setEditingId(null); setModalOpen(true); };
+  const openAdd = () => { setForm(BLANK_FORM); setEditingId(null); setImageError(''); setSaveError(''); setImageTab('url'); setModalOpen(true); };
   const openEdit = (p: Product) => {
+    setImageError(''); setSaveError('');
     setForm({
       name: p.name, category: p.category, price: String(p.price), unit: p.unit,
       badge: p.badge ?? '', description: p.description, image: p.image,
+      active: p.active !== false, schedule: p.schedule ?? null,
       v1w: p.variants[0]?.weight ?? '', v1p: String(p.variants[0]?.price ?? ''),
       v2w: p.variants[1]?.weight ?? '', v2p: String(p.variants[1]?.price ?? ''),
       v3w: p.variants[2]?.weight ?? '', v3p: String(p.variants[2]?.price ?? ''),
@@ -2754,6 +3866,10 @@ function AdminSectionProducts({ catalog, loading, onAdd, onEdit, onDelete }: {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (form.schedule?.some(window => !window.start || !window.end || window.end <= window.start)) {
+      window.alert('Each selected day must have a closing time later than its opening time.');
+      return;
+    }
     const buildVariant = (w: string, p: string): ProductVariant[] =>
       w && p ? [{ material: 'Standard', weight: w, price: Number(p) }] : [];
     const variants = [
@@ -2771,11 +3887,15 @@ function AdminSectionProducts({ catalog, loading, onAdd, onEdit, onDelete }: {
       description: form.description, image: form.image,
       rating: existing?.rating ?? 4.5, reviews: existing?.reviews ?? 0,
       variants, tags: existing?.tags ?? [],
+      active: form.active, schedule: form.schedule,
     };
     setSaving(true);
+    setSaveError('');
     try {
       if (editingId) { await onEdit(product); } else { await onAdd(product); }
       setModalOpen(false);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Could not save the product. Please try again.');
     } finally { setSaving(false); }
   };
 
@@ -2811,7 +3931,7 @@ function AdminSectionProducts({ catalog, loading, onAdd, onEdit, onDelete }: {
           <table className="w-full">
             <thead>
               <tr className="border-b border-border bg-muted/40">
-                {['Product', 'Category', 'Price', 'Variants', 'Badge', 'Actions'].map(h => (
+                {['Product', 'Category', 'Price', 'Variants', 'Availability', 'Badge', 'Actions'].map(h => (
                   <th key={h} className="whitespace-nowrap px-5 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-muted-foreground">{h}</th>
                 ))}
               </tr>
@@ -2831,6 +3951,10 @@ function AdminSectionProducts({ catalog, loading, onAdd, onEdit, onDelete }: {
                   <td className="px-5 py-3 text-sm text-muted-foreground">{p.category}</td>
                   <td className="px-5 py-3 text-sm font-bold">{money(p.price)}</td>
                   <td className="px-5 py-3 text-sm text-muted-foreground">{p.variants.length} variant{p.variants.length !== 1 ? 's' : ''}</td>
+                  <td className="px-5 py-3 text-xs">
+                    <span className={availability(p.active, p.schedule) ? 'text-green-700' : 'text-amber-700'}>{availability(p.active, p.schedule) ? 'Available' : 'Unavailable'}</span>
+                    <p className="max-w-40 text-muted-foreground">{scheduleText(p.active, p.schedule)}</p>
+                  </td>
                   <td className="px-5 py-3">
                     {p.badge
                       ? <span className="rounded-full bg-accent px-2 py-0.5 text-[10px] font-bold text-accent-foreground">{p.badge}</span>
@@ -2883,6 +4007,7 @@ function AdminSectionProducts({ catalog, loading, onAdd, onEdit, onDelete }: {
                   <datalist id="unit-presets">{(() => { try { const u = settings.unit_presets ? JSON.parse(settings.unit_presets) : null; return (Array.isArray(u) ? u : UNIT_PRESETS).map((v: string) => <option key={v} value={v} />); } catch { return UNIT_PRESETS.map(u => <option key={u} value={u} />); } })()}</datalist>
                 </div>
               </div>
+              <AvailabilityEditor active={form.active} schedule={form.schedule} onChange={(active, schedule) => setForm(prev => ({ ...prev, active, schedule }))} />
               <div>
                 <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Badge (optional)</label>
                 <input value={form.badge} onChange={f('badge')} placeholder="Best seller" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
@@ -2891,7 +4016,7 @@ function AdminSectionProducts({ catalog, loading, onAdd, onEdit, onDelete }: {
                 <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Product image</label>
                 <div className="mb-2 flex rounded-xl border border-border overflow-hidden">
                   {(['url', 'upload'] as const).map(t => (
-                    <button key={t} type="button" onClick={() => setImageTab(t)}
+                     <button key={t} type="button" onClick={() => { setImageTab(t); setImageError(''); }}
                       className={`flex-1 py-2 text-xs font-bold capitalize ${imageTab === t ? 'bg-primary text-primary-foreground' : 'bg-muted hover:bg-muted/80'}`}>
                       {t === 'url' ? 'URL / preset' : 'Upload file'}
                     </button>
@@ -2909,12 +4034,18 @@ function AdminSectionProducts({ catalog, loading, onAdd, onEdit, onDelete }: {
                   </div>
                 ) : (
                   <input type="file" accept="image/*" onChange={e => {
-                    const file = e.target.files?.[0]; if (!file) return;
-                    const reader = new FileReader();
-                    reader.onloadend = () => setForm(p => ({ ...p, image: reader.result as string }));
-                    reader.readAsDataURL(file);
+                    const file = e.target.files?.[0]; e.target.value = '';
+                    if (!file) return;
+                    setImageError('');
+                    setImageLoading(true);
+                    void readAdminImage(file)
+                      .then(image => setForm(p => ({ ...p, image })))
+                      .catch(error => setImageError(error.message))
+                      .finally(() => setImageLoading(false));
                   }} className="w-full rounded-xl border border-input px-4 py-2.5 text-sm" />
                 )}
+                <p className="mt-1 text-xs text-muted-foreground">{IMAGE_UPLOAD_HINT}</p>
+                {imageError && <p role="alert" className="mt-1 text-xs text-red-600">{imageError}</p>}
                 {form.image && <img src={form.image} alt="" className="mt-2 h-20 w-20 rounded-xl object-cover border border-border" />}
               </div>
               <div>
@@ -2933,9 +4064,10 @@ function AdminSectionProducts({ catalog, loading, onAdd, onEdit, onDelete }: {
                 </div>
                 <p className="mt-1.5 text-xs text-muted-foreground">Leave blank to skip a variant. At least one required.</p>
               </div>
+              {saveError && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{saveError}</p>}
               <div className="flex gap-3 pt-2 pb-1">
                 <button type="button" onClick={() => setModalOpen(false)} className="flex-1 rounded-xl border border-border py-3 text-sm font-bold">Cancel</button>
-                <button type="submit" disabled={saving} className="flex-1 rounded-xl bg-primary py-3 text-sm font-bold text-primary-foreground disabled:opacity-60">{saving ? 'Saving…' : editingId ? 'Save changes' : 'Add product'}</button>
+                <button type="submit" disabled={saving || imageLoading || Boolean(imageError)} className="flex-1 rounded-xl bg-primary py-3 text-sm font-bold text-primary-foreground disabled:opacity-60">{saving ? 'Saving…' : imageLoading ? 'Reading image…' : editingId ? 'Save changes' : 'Add product'}</button>
               </div>
             </form>
           </div>
@@ -2972,6 +4104,8 @@ function AdminSectionOrders({ orders, loading, onStatusChange }: {
   const [toDate, setToDate] = useState(new Date().toISOString().slice(0, 10));
   const [reportCategory, setReportCategory] = useState('All');
   const [reportStatus, setReportStatus] = useState<OrderStatus | 'All'>('All');
+  const [reportPdfDownloading, setReportPdfDownloading] = useState(false);
+  const [reportPdfError, setReportPdfError] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [deliveryOrder, setDeliveryOrder] = useState<OrderRecord | null>(null);
   const [deliveryDetails, setDeliveryDetails] = useState<DeliveryDetails>({
@@ -3002,7 +4136,9 @@ function AdminSectionOrders({ orders, loading, onStatusChange }: {
   const reportCategories = Array.from(new Set(orders.flatMap(order => order.items.map(line => line.product?.category).filter(Boolean) as string[]))).sort();
   const orderDay = (date: string) => {
     const parsed = new Date(date);
-    return Number.isNaN(parsed.getTime()) ? date.slice(0, 10) : parsed.toISOString().slice(0, 10);
+    return Number.isNaN(parsed.getTime())
+      ? date.slice(0, 10)
+      : new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(parsed);
   };
   const reportOrders = orders.filter(order => {
     const day = orderDay(order.date);
@@ -3012,42 +4148,95 @@ function AdminSectionOrders({ orders, loading, onStatusChange }: {
   const categoryReport = reportCategories.map(category => ({
     category,
     orders: reportOrders.filter(order => order.items.some(line => line.product?.category === category)).length,
-    revenue: reportOrders.reduce((sum, order) => sum + order.items.filter(line => line.product?.category === category).reduce((lineSum, line) => lineSum + (line.variant?.price ?? 0) * line.quantity, 0), 0),
+    revenue: reportOrders.filter(order => order.paymentMethod !== 'razorpay' || order.paymentStatus === 'paid')
+      .reduce((sum, order) => sum + order.items.filter(line => line.product?.category === category).reduce((lineSum, line) => lineSum + (line.variant?.price ?? 0) * line.quantity, 0), 0),
   }));
-  const statusReport = (['Confirmed', 'Packing', 'Out for delivery', 'Delivered'] as OrderStatus[]).map(status => ({
+  const statusReport = (['Awaiting payment', 'Payment failed', 'Confirmed', 'Packing', 'Out for delivery', 'Delivered'] as OrderStatus[]).map(status => ({
     status, count: reportOrders.filter(order => order.status === status).length,
   }));
-  const reportRevenue = reportOrders.reduce((sum, order) => sum + order.subtotal, 0);
+  const reportRevenue = reportOrders.filter(order => order.paymentMethod !== 'razorpay' || order.paymentStatus === 'paid').reduce((sum, order) => sum + order.subtotal, 0);
+  const revenueOrders = reportOrders.filter(order => order.paymentMethod !== 'razorpay' || order.paymentStatus === 'paid');
   const reportItems = reportOrders.reduce((sum, order) => sum + order.items.reduce((lineSum, line) => lineSum + line.quantity, 0), 0);
 
-  const reportRows = reportOrders.flatMap(order => order.items.map(line => ({
-    orderId: order.id, date: order.date, status: order.status, customer: order.customerName ?? '',
-    email: order.customerEmail ?? '', phone: order.phone, address: order.address,
-    category: line.product?.category ?? '', product: line.product?.name ?? 'Order item',
-    variant: line.variant ? variantLabel(line.variant) : 'Standard', quantity: line.quantity,
-    unitPrice: line.variant?.price ?? 0, lineTotal: (line.variant?.price ?? 0) * line.quantity,
-  })));
-  const downloadReport = (kind: 'excel' | 'pdf') => {
+  const reportRows = reportOrders.map(order => {
+    const items = order.items.map(line => ({
+      category: line.product?.category ?? '',
+      product: line.product?.name ?? 'Order item',
+      variant: line.variant ? variantLabel(line.variant) : 'Standard',
+      quantity: line.quantity,
+      unitPrice: line.variant?.price ?? 0,
+      lineTotal: order.paymentMethod !== 'razorpay' || order.paymentStatus === 'paid'
+        ? (line.variant?.price ?? 0) * line.quantity
+        : 0,
+    }));
+    return {
+      orderId: order.id, date: order.date, status: order.status, customer: order.customerName ?? '',
+      email: order.customerEmail ?? '', phone: order.phone, address: order.address,
+      paymentMethod: order.paymentMethod ?? 'cod', paymentStatus: order.paymentStatus ?? 'pending',
+      quantity: items.reduce((sum, item) => sum + item.quantity, 0),
+      lineTotal: items.reduce((sum, item) => sum + item.lineTotal, 0),
+      items,
+    };
+  });
+  const downloadReport = async (kind: 'excel' | 'pdf') => {
     const title = `Aggarwal Sweets order report (${fromDate} to ${toDate})`;
-    const headers = ['Order ID', 'Date', 'Status', 'Customer', 'Email', 'Phone', 'Address', 'Category', 'Product', 'Variant', 'Qty', 'Unit price', 'Line total'];
-    const escapeHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] ?? char));
-    const table = reportRows.map(row => headers.map((_, index) => [
-      row.orderId, row.date, row.status, row.customer, row.email, row.phone, row.address, row.category,
-      row.product, row.variant, row.quantity, row.unitPrice, row.lineTotal,
-    ][index]).map(escapeHtml));
-    const summary = `<h1>${escapeHtml(title)}</h1><p>Orders: ${reportOrders.length} · Revenue: ${escapeHtml(money(reportRevenue))} · Items: ${reportItems}</p><p>Filters: status ${escapeHtml(reportStatus)}, category ${escapeHtml(reportCategory)}</p>`;
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>body{font:12px Arial;color:#222;padding:24px}h1{font-size:20px}table{border-collapse:collapse;width:100%;font-size:10px}th,td{border:1px solid #bbb;padding:5px;text-align:left}th{background:#eee}p{margin:6px 0 14px}</style></head><body>${summary}<table><thead><tr>${headers.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead><tbody>${table.map(row => `<tr>${row.map(cell => `<td>${cell}</td>`).join('')}</tr>`).join('')}</tbody></table></body></html>`;
+    const headers = ['Order ID', 'Date', 'Status', 'Payment method', 'Payment status', 'Customer', 'Email', 'Phone', 'Address', 'All items in order', 'Total qty', 'Recognized line revenue'];
     if (kind === 'excel') {
+      const escapeHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] ?? char));
+      const table = reportRows.map(row => [
+        row.orderId, row.date, row.status, row.paymentMethod, row.paymentStatus, row.customer, row.email,
+        row.phone, row.address,
+        row.items.map(item => `${item.product} · ${item.category || 'Uncategorized'} · ${item.variant} | ${item.quantity} × ${money(item.unitPrice)} = ${money(item.lineTotal)}`).join('\n') || 'No items',
+        row.quantity, money(row.lineTotal),
+      ].map(value => escapeHtml(value)));
+      const summary = `<h1>${escapeHtml(title)}</h1><p>Orders: ${reportOrders.length} · Revenue: ${escapeHtml(money(reportRevenue))} · Items: ${reportItems}</p><p>Filters: status ${escapeHtml(reportStatus)}, category ${escapeHtml(reportCategory)}</p>`;
+      const body = table.map(row => `<tr>${row.map((cell, index) => `<td class="${index === 0 ? 'order-id' : ''} ${index === 9 ? 'items-cell' : ''}">${cell.replace(/\n/g, '<br>')}</td>`).join('')}</tr>`).join('');
+      const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>body{font:12px Arial;color:#222;padding:24px}h1{font-size:20px}table{border-collapse:collapse;width:100%;font-size:10px}th,td{border:1px solid #bbb;padding:5px;text-align:left;vertical-align:top}th{background:#eee}.order-id{font-weight:bold}.items-cell{white-space:normal;line-height:1.5}p{margin:6px 0 14px}</style></head><body>${summary}<table><thead><tr>${headers.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></body></html>`;
       const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a'); anchor.href = url; anchor.download = `orders-${fromDate}-to-${toDate}.xls`; anchor.click();
       URL.revokeObjectURL(url);
       return;
     }
-    const printWindow = window.open('', '_blank', 'noopener,noreferrer');
-    if (!printWindow) { window.alert('Please allow pop-ups to download the PDF report.'); return; }
-    printWindow.document.write(html.replace('</body>', '<script>window.onload=function(){window.print();}</script></body>'));
-    printWindow.document.close();
+    setReportPdfDownloading(true);
+    setReportPdfError('');
+    try {
+      const response = await fetch(`${API}/orders/report.pdf`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title, fromDate, toDate, status: reportStatus, category: reportCategory,
+          orders: reportOrders.length, revenue: reportRevenue, items: reportItems,
+          rows: reportRows.map(row => ({
+            ...row,
+            date: formatOrderDate(row.date),
+            paymentMethod: row.paymentMethod === 'razorpay' ? 'Razorpay' : 'Cash on delivery',
+            items: row.items,
+          })),
+        }),
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(typeof result.error === 'string' ? result.error : `Could not download the PDF (HTTP ${response.status}).`);
+      }
+      const blob = await response.blob();
+      if (!blob.size || (blob.type && !blob.type.includes('application/pdf'))) {
+        throw new Error('The server returned an invalid PDF. Please try again.');
+      }
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `orders-${fromDate}-to-${toDate}.pdf`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      setReportPdfError(error instanceof Error ? error.message : 'Could not download the order PDF. Please try again.');
+    } finally {
+      setReportPdfDownloading(false);
+    }
   };
 
   const updateStatus = (order: OrderRecord, status: OrderStatus) => {
@@ -3100,10 +4289,14 @@ function AdminSectionOrders({ orders, loading, onStatusChange }: {
             <p className="mt-1 text-xs text-muted-foreground">Detailed order and line-item exports with date, status, and category filters.</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button onClick={() => downloadReport('excel')} className="flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-bold hover:bg-muted"><FileSpreadsheet className="size-3.5 text-emerald-600" /> Excel</button>
-            <button onClick={() => downloadReport('pdf')} className="flex items-center gap-2 rounded-xl bg-primary px-3 py-2 text-xs font-bold text-primary-foreground hover:opacity-90"><Printer className="size-3.5" /> PDF / print</button>
+            <button type="button" onClick={() => void downloadReport('excel')} className="flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-bold hover:bg-muted"><FileSpreadsheet className="size-3.5 text-emerald-600" /> Excel</button>
+            <button type="button" onClick={() => void downloadReport('pdf')} disabled={reportPdfDownloading}
+              className="flex items-center gap-2 rounded-xl bg-primary px-3 py-2 text-xs font-bold text-primary-foreground hover:opacity-90 disabled:opacity-60">
+              <Download className="size-3.5" /> {reportPdfDownloading ? 'Preparing PDF…' : 'Download PDF'}
+            </button>
           </div>
         </div>
+        {reportPdfError && <p role="alert" className="mt-3 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{reportPdfError}</p>}
         <div className="mt-4 flex flex-wrap gap-2">
           {([
             ['today', 'Today'], ['week', 'Last week'], ['month', 'Last month'],
@@ -3115,7 +4308,7 @@ function AdminSectionOrders({ orders, loading, onStatusChange }: {
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <label className="text-xs font-bold uppercase tracking-wider">From<input type="date" value={fromDate} onChange={e => { setFromDate(e.target.value); setReportPreset('custom'); }} className="mt-1 block w-full rounded-xl border border-input bg-background px-3 py-2 text-sm font-normal normal-case tracking-normal" /></label>
           <label className="text-xs font-bold uppercase tracking-wider">To<input type="date" value={toDate} onChange={e => { setToDate(e.target.value); setReportPreset('custom'); }} className="mt-1 block w-full rounded-xl border border-input bg-background px-3 py-2 text-sm font-normal normal-case tracking-normal" /></label>
-          <label className="text-xs font-bold uppercase tracking-wider">Status<select value={reportStatus} onChange={e => setReportStatus(e.target.value as OrderStatus | 'All')} className="mt-1 block w-full rounded-xl border border-input bg-background px-3 py-2 text-sm font-normal normal-case tracking-normal"><option>All</option>{(['Confirmed', 'Packing', 'Out for delivery', 'Delivered'] as OrderStatus[]).map(status => <option key={status}>{status}</option>)}</select></label>
+          <label className="text-xs font-bold uppercase tracking-wider">Status<select value={reportStatus} onChange={e => setReportStatus(e.target.value as OrderStatus | 'All')} className="mt-1 block w-full rounded-xl border border-input bg-background px-3 py-2 text-sm font-normal normal-case tracking-normal"><option>All</option>{(['Awaiting payment', 'Payment failed', 'Confirmed', 'Packing', 'Out for delivery', 'Delivered'] as OrderStatus[]).map(status => <option key={status}>{status}</option>)}</select></label>
           <label className="text-xs font-bold uppercase tracking-wider">Category<select value={reportCategory} onChange={e => setReportCategory(e.target.value)} className="mt-1 block w-full rounded-xl border border-input bg-background px-3 py-2 text-sm font-normal normal-case tracking-normal"><option>All</option>{reportCategories.map(category => <option key={category}>{category}</option>)}</select></label>
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
@@ -3137,7 +4330,7 @@ function AdminSectionOrders({ orders, loading, onStatusChange }: {
           </div>
           <div className="rounded-xl border border-border p-4">
             <p className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-muted-foreground"><CalendarDays className="size-3.5" /> Range summary</p>
-            <div className="space-y-3 text-sm"><div className="flex justify-between"><span className="text-muted-foreground">Average order</span><b>{money(reportOrders.length ? reportRevenue / reportOrders.length : 0)}</b></div><div className="flex justify-between"><span className="text-muted-foreground">Top category</span><b>{categoryReport.slice().sort((a, b) => b.revenue - a.revenue)[0]?.category ?? '—'}</b></div><div className="flex justify-between"><span className="text-muted-foreground">Export rows</span><b>{reportRows.length}</b></div></div>
+            <div className="space-y-3 text-sm"><div className="flex justify-between"><span className="text-muted-foreground">Average order</span><b>{money(revenueOrders.length ? reportRevenue / revenueOrders.length : 0)}</b></div><div className="flex justify-between"><span className="text-muted-foreground">Top category</span><b>{categoryReport.slice().sort((a, b) => b.revenue - a.revenue)[0]?.category ?? '—'}</b></div><div className="flex justify-between"><span className="text-muted-foreground">Export rows</span><b>{reportRows.length}</b></div></div>
           </div>
         </div>
       </div>
@@ -3147,7 +4340,7 @@ function AdminSectionOrders({ orders, loading, onStatusChange }: {
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Order ID, phone, address…" className="w-48 bg-transparent text-sm outline-none" />
         </div>
         <div className="flex flex-wrap gap-1.5">
-          {(['All', 'Confirmed', 'Packing', 'Out for delivery', 'Delivered'] as const).map(s => (
+          {(['All', 'Awaiting payment', 'Payment failed', 'Confirmed', 'Packing', 'Out for delivery', 'Delivered'] as const).map(s => (
             <button key={s} onClick={() => setFilter(s)}
               className={`rounded-full px-3 py-1.5 text-xs font-bold transition-colors ${filter === s ? 'bg-primary text-primary-foreground' : 'border border-border bg-background hover:bg-muted'}`}>
               {s}
@@ -3166,12 +4359,15 @@ function AdminSectionOrders({ orders, loading, onStatusChange }: {
         <div className="space-y-3">
           {filtered.map(order => (
             <div key={order.id} className="overflow-hidden rounded-2xl border border-border bg-background shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+              <div className="flex flex-wrap items-start justify-between gap-3 px-5 py-4">
                 <div className="flex flex-wrap items-center gap-3">
                   <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold whitespace-nowrap ${ORDER_STATUSES[order.status].color}`}>{ORDER_STATUSES[order.status].label}</span>
-                  <div>
-                    <p className="font-semibold">{order.id}</p>
-                    <p className="text-xs text-muted-foreground">{order.date} · {order.phone}</p>
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Order name</p>
+                    <p className="max-w-xl font-semibold">{order.items.map(line => line.product?.name).filter(Boolean).join(', ') || 'Sweets order'}</p>
+                    <p className="mt-1 break-all font-mono-ui text-xs text-muted-foreground">Order no. {order.id}</p>
+                    <p className="text-xs text-muted-foreground">{formatOrderDate(order.date)}</p>
+                    <p className="mt-1 text-xs font-semibold">{order.paymentMethod === 'razorpay' ? 'Razorpay' : 'Cash on delivery'} · {order.paymentStatus ?? 'pending'}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
@@ -3179,15 +4375,42 @@ function AdminSectionOrders({ orders, loading, onStatusChange }: {
                   <select
                     value={order.status}
                     onChange={e => updateStatus(order, e.target.value as OrderStatus)}
-                    className="rounded-xl border border-border bg-background px-3 py-1.5 text-xs font-bold outline-none focus:ring-2 focus:ring-ring"
+                    disabled={order.paymentMethod === 'razorpay' && order.paymentStatus !== 'paid'}
+                    title={order.paymentMethod === 'razorpay' && order.paymentStatus !== 'paid' ? 'Online orders can be dispatched only after payment is confirmed.' : undefined}
+                    className="rounded-xl border border-border bg-background px-3 py-1.5 text-xs font-bold outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                     data-testid={`select-order-status-${order.id}`}
                   >
+                    {!(['Confirmed', 'Packing', 'Out for delivery', 'Delivered'] as string[]).includes(order.status) && <option value={order.status} disabled>{order.status}</option>}
                     {(['Confirmed', 'Packing', 'Out for delivery', 'Delivered'] as const).map(s => <option key={s}>{s}</option>)}
                   </select>
-                  <button onClick={() => setExpandedId(expandedId === order.id ? null : order.id)}
-                    className="grid size-8 place-items-center rounded-lg border border-border text-muted-foreground hover:bg-muted">
+                  <button type="button" onClick={() => setExpandedId(expandedId === order.id ? null : order.id)}
+                    aria-expanded={expandedId === order.id}
+                    className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold text-muted-foreground hover:bg-muted">
+                    {expandedId === order.id ? 'Hide details' : 'Details'}
                     <ChevronDown className={`size-4 transition-transform ${expandedId === order.id ? 'rotate-180' : ''}`} />
                   </button>
+                </div>
+              </div>
+              <div className="grid gap-4 border-t border-border px-5 py-4 text-sm md:grid-cols-2">
+                <div>
+                  <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Customer</p>
+                  <p className="font-semibold">{order.customerName || 'Name not provided'}</p>
+                  <p className="break-all text-xs text-muted-foreground">{order.customerEmail || 'Email not provided'}</p>
+                  <p className="text-xs text-muted-foreground">{order.phone || 'Mobile not provided'}</p>
+                </div>
+                <div>
+                  <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Delivery address</p>
+                  <p className="break-words text-sm">{order.address || 'Address not provided'}</p>
+                </div>
+                <div className="md:col-span-2">
+                  <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Items ordered</p>
+                  <div className="flex flex-wrap gap-2">
+                    {order.items.map((line, i) => (
+                      <span key={i} className="rounded-lg bg-muted/60 px-3 py-2 text-xs">
+                        <b>{line.product?.name ?? 'Order item'}</b> · {line.variant ? variantLabel(line.variant) : 'Standard'} × {line.quantity}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               </div>
               {expandedId === order.id && (
@@ -3224,6 +4447,7 @@ function AdminSectionOrders({ orders, loading, onStatusChange }: {
                           <div>
                             <p className="text-sm font-semibold">{line.product?.name ?? 'Order item'}</p>
                             <p className="text-xs text-muted-foreground">{line.variant ? variantLabel(line.variant) : 'Standard'} · qty {line.quantity}</p>
+                            {line.product?.description && <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">{line.product.description}</p>}
                           </div>
                         </div>
                         <p className="text-sm font-bold">{money((line.variant?.price ?? 0) * line.quantity)}</p>
@@ -3231,6 +4455,21 @@ function AdminSectionOrders({ orders, loading, onStatusChange }: {
                     ))}
                   </div>
                   </div>
+                  {order.pricing && (
+                    <div className="rounded-xl border border-border bg-background p-4">
+                      <p className="mb-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">Order description and price details</p>
+                      <div className="space-y-2 text-sm">
+                        <div className="flex justify-between gap-4"><span>Items subtotal</span><span>{money(order.pricing.itemsSubtotal)}</span></div>
+                        {order.pricing.discount > 0 && <div className="flex justify-between gap-4 text-green-700"><span>Discount{order.pricing.couponCode ? ` (${order.pricing.couponCode})` : ''}</span><span>−{money(order.pricing.discount)}</span></div>}
+                        {order.pricing.gst > 0 && <div className="flex justify-between gap-4"><span>GST ({order.pricing.gstPercent}%)</span><span>{money(order.pricing.gst)}</span></div>}
+                        {(order.pricing.deliveryCharge > 0 || order.pricing.deliveryWaived) && (
+                          <div className="flex justify-between gap-4"><span>{order.pricing.deliveryWaived ? 'Delivery charge · waived' : 'Delivery charge'}</span><span>{money(order.pricing.deliveryCharge)}</span></div>
+                        )}
+                        {order.pricing.handlingCharge > 0 && <div className="flex justify-between gap-4"><span>Handling charge</span><span>{money(order.pricing.handlingCharge)}</span></div>}
+                        <div className="flex justify-between gap-4 border-t border-border pt-2 font-bold"><span>Order total</span><span>{money(order.pricing.total)}</span></div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -3379,8 +4618,8 @@ function AdminSectionCustomers({ customers }: { customers: CustomerRecord[] }) {
 
 // ─── Admin · Categories ───────────────────────────────────────────────────────
 function AdminSectionCategories({ onRefresh }: { onRefresh: () => void }) {
-  type CatForm = { label: string; note: string; image: string; inMenu: boolean; inCraving: boolean };
-  const BLANK_CAT: CatForm = { label: '', note: '', image: '/hero-mithai.jpg', inMenu: true, inCraving: true };
+  type CatForm = { label: string; note: string; image: string; inMenu: boolean; inCraving: boolean; active: boolean; schedule: AvailabilityWindow[] | null };
+  const BLANK_CAT: CatForm = { label: '', note: '', image: '/hero-mithai.jpg', inMenu: true, inCraving: true, active: true, schedule: null };
   const settings = useSiteSettings();
   const [cats, setCats] = useState<MasterCategory[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
@@ -3388,6 +4627,9 @@ function AdminSectionCategories({ onRefresh }: { onRefresh: () => void }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [imageError, setImageError] = useState('');
+  const [saveError, setSaveError] = useState('');
+  const [imageLoading, setImageLoading] = useState(false);
 
   useEffect(() => {
     try {
@@ -3402,34 +4644,55 @@ function AdminSectionCategories({ onRefresh }: { onRefresh: () => void }) {
   }, [settings.categories_master]);
 
   const persist = async (next: MasterCategory[]) => {
-    await fetch(`${API}/settings/categories_master`, {
+    const body = JSON.stringify({ value: JSON.stringify(next) });
+    checkImageSaveSize(body);
+    const response = await fetch(`${API}/settings/categories_master`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ value: JSON.stringify(next) }),
+      body,
     });
+    await requireImageSave(response, 'Saving categories');
+    setCats(next);
     window.dispatchEvent(new Event('aggarwal-settings-updated'));
     onRefresh();
   };
 
   const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault(); setSaving(true);
+    e.preventDefault();
+    if (form.schedule?.some(window => !window.start || !window.end || window.end <= window.start)) {
+      window.alert('Each selected day must have a closing time later than its opening time.');
+      return;
+    }
+    setSaving(true);
+    setSaveError('');
     try {
       const next = editingId
         ? cats.map(c => c.id === editingId ? { ...c, ...form } : c)
         : [...cats, { id: `cat-${Date.now()}`, ...form }];
       await persist(next);
       setModalOpen(false);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Could not save the category. Please try again.');
     } finally { setSaving(false); }
   };
 
   const handleDelete = async (id: string) => {
-    await persist(cats.filter(c => c.id !== id));
-    setDeleteId(null);
+    setSaveError('');
+    try {
+      await persist(cats.filter(c => c.id !== id));
+      setDeleteId(null);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Could not delete the category.');
+    }
   };
 
   const toggleField = async (id: string, field: 'inMenu' | 'inCraving') => {
     const next = cats.map(c => c.id === id ? { ...c, [field]: !c[field] } : c);
-    setCats(next);
-    await persist(next);
+    setSaveError('');
+    try {
+      await persist(next);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Could not update the category.');
+    }
   };
 
   return (
@@ -3439,11 +4702,12 @@ function AdminSectionCategories({ onRefresh }: { onRefresh: () => void }) {
           <h2 className="text-xl font-bold">Categories</h2>
           <p className="text-sm text-muted-foreground">Master list — controls the nav menu, homepage craving section, and product form dropdown.</p>
         </div>
-        <button onClick={() => { setForm(BLANK_CAT); setEditingId(null); setModalOpen(true); }}
+        <button onClick={() => { setForm(BLANK_CAT); setEditingId(null); setImageError(''); setSaveError(''); setModalOpen(true); }}
           className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground hover:opacity-90">
           <Plus className="size-4" /> Add category
         </button>
       </div>
+      {saveError && !modalOpen && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{saveError}</p>}
 
       {/* Table */}
       <div className="overflow-hidden rounded-2xl border border-border bg-background">
@@ -3452,6 +4716,7 @@ function AdminSectionCategories({ onRefresh }: { onRefresh: () => void }) {
             <tr>
               <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Category</th>
               <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider hidden sm:table-cell">Tagline</th>
+              <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Availability</th>
               <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">In Menu</th>
               <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">In Craving</th>
               <th className="px-4 py-3" />
@@ -3467,6 +4732,7 @@ function AdminSectionCategories({ onRefresh }: { onRefresh: () => void }) {
                   </div>
                 </td>
                 <td className="px-4 py-3 text-muted-foreground hidden sm:table-cell">{cat.note}</td>
+                <td className="px-4 py-3 text-xs"><span className={availability(cat.active, cat.schedule) ? 'text-green-700' : 'text-amber-700'}>{availability(cat.active, cat.schedule) ? 'Available' : 'Unavailable'}</span><p className="max-w-40 text-muted-foreground">{scheduleText(cat.active, cat.schedule)}</p></td>
                 <td className="px-4 py-3 text-center">
                   <button onClick={() => toggleField(cat.id, 'inMenu')}
                     className={`inline-flex size-6 items-center justify-center rounded-md border-2 transition-colors ${cat.inMenu ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background hover:border-primary/50'}`}>
@@ -3481,7 +4747,7 @@ function AdminSectionCategories({ onRefresh }: { onRefresh: () => void }) {
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex items-center justify-end gap-2">
-                    <button onClick={() => { setForm({ label: cat.label, note: cat.note, image: cat.image, inMenu: cat.inMenu, inCraving: cat.inCraving }); setEditingId(cat.id); setModalOpen(true); }}
+                    <button onClick={() => { setForm({ label: cat.label, note: cat.note, image: cat.image, inMenu: cat.inMenu, inCraving: cat.inCraving, active: cat.active !== false, schedule: cat.schedule ?? null }); setEditingId(cat.id); setImageError(''); setSaveError(''); setModalOpen(true); }}
                       className="grid size-8 place-items-center rounded-lg border border-border hover:bg-muted" title="Edit">
                       <Pencil className="size-3.5" />
                     </button>
@@ -3494,7 +4760,7 @@ function AdminSectionCategories({ onRefresh }: { onRefresh: () => void }) {
               </tr>
             ))}
             {cats.length === 0 && (
-              <tr><td colSpan={5} className="px-4 py-10 text-center text-sm text-muted-foreground">No categories yet. Click "Add category" to create the first one.</td></tr>
+              <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-muted-foreground">No categories yet. Click "Add category" to create the first one.</td></tr>
             )}
           </tbody>
         </table>
@@ -3510,7 +4776,7 @@ function AdminSectionCategories({ onRefresh }: { onRefresh: () => void }) {
       {/* Add / Edit modal */}
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-md rounded-2xl bg-background p-6 shadow-2xl">
+          <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-background p-6 shadow-2xl">
             <div className="mb-5 flex items-center justify-between">
               <h3 className="text-lg font-bold">{editingId ? 'Edit category' : 'Add category'}</h3>
               <button onClick={() => setModalOpen(false)} className="grid size-8 place-items-center rounded-lg hover:bg-muted"><X className="size-4" /></button>
@@ -3526,22 +4792,28 @@ function AdminSectionCategories({ onRefresh }: { onRefresh: () => void }) {
                 <input value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))}
                   placeholder="e.g. Cool &amp; refreshing" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
               </div>
+              <AvailabilityEditor active={form.active} schedule={form.schedule} onChange={(active, schedule) => setForm(prev => ({ ...prev, active, schedule }))} />
               <div>
                 <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Category image <span className="text-muted-foreground font-normal normal-case">(for craving card background)</span></label>
                 <div className="flex flex-col gap-2 sm:flex-row">
-                  <input value={form.image} onChange={e => setForm(f => ({ ...f, image: e.target.value }))}
+                   <input value={form.image} onChange={e => { setImageError(''); setForm(f => ({ ...f, image: e.target.value })); }}
                     placeholder="/hero-mithai.jpg or https://…" className="min-w-0 flex-1 rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
                   <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-input px-3 py-2.5 text-xs font-bold hover:bg-muted">
                     <Upload className="size-3.5" /> Browse image
                     <input type="file" accept="image/*" className="hidden" onChange={e => {
-                      const file = e.target.files?.[0];
+                       const file = e.target.files?.[0]; e.target.value = '';
                       if (!file) return;
-                      const reader = new FileReader();
-                      reader.onloadend = () => setForm(current => ({ ...current, image: reader.result as string }));
-                      reader.readAsDataURL(file);
+                       setImageError('');
+                       setImageLoading(true);
+                       void readAdminImage(file)
+                         .then(image => setForm(current => ({ ...current, image })))
+                         .catch(error => setImageError(error.message))
+                         .finally(() => setImageLoading(false));
                     }} />
                   </label>
                 </div>
+                 <p className="mt-1 text-xs text-muted-foreground">{IMAGE_UPLOAD_HINT}</p>
+                 {imageError && <p role="alert" className="mt-1 text-xs text-red-600">{imageError}</p>}
                 {form.image && <img src={form.image} alt="Category preview" className="mt-2 h-24 w-full rounded-xl border border-border object-cover" />}
               </div>
               <div className="flex gap-6 rounded-xl border border-border bg-muted/30 px-4 py-3">
@@ -3558,12 +4830,13 @@ function AdminSectionCategories({ onRefresh }: { onRefresh: () => void }) {
                   </label>
                 ))}
               </div>
+              {saveError && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{saveError}</p>}
               <div className="flex gap-3 pt-1">
                 <button type="button" onClick={() => setModalOpen(false)}
                   className="flex-1 rounded-xl border border-border py-2.5 text-sm font-bold hover:bg-muted">Cancel</button>
-                <button type="submit" disabled={saving}
+                <button type="submit" disabled={saving || imageLoading || Boolean(imageError)}
                   className="flex-1 rounded-xl bg-primary py-2.5 text-sm font-bold text-primary-foreground hover:opacity-90 disabled:opacity-60">
-                  {saving ? 'Saving…' : editingId ? 'Save changes' : 'Add category'}
+                   {saving ? 'Saving…' : imageLoading ? 'Reading image…' : editingId ? 'Save changes' : 'Add category'}
                 </button>
               </div>
             </form>
@@ -3579,6 +4852,7 @@ function AdminSectionCategories({ onRefresh }: { onRefresh: () => void }) {
               <Trash2 className="size-7" />
             </div>
             <h3 className="text-lg font-bold">Delete category?</h3>
+            {saveError && <p role="alert" className="mt-3 rounded-xl bg-red-50 p-3 text-sm text-red-700">{saveError}</p>}
             <p className="mt-1 text-sm text-muted-foreground">Existing products using this category won't be deleted — they'll just show an unlisted category label.</p>
             <div className="mt-5 flex gap-3">
               <button onClick={() => setDeleteId(null)} className="flex-1 rounded-xl border border-border py-2.5 text-sm font-bold hover:bg-muted">Cancel</button>
@@ -3593,7 +4867,201 @@ function AdminSectionCategories({ onRefresh }: { onRefresh: () => void }) {
 
 // ─── Admin · Settings ─────────────────────────────────────────────────────────
 type CravingCat = { label: string; note: string; image: string };
+function AdminAdditionalSettings() {
+  const storedSettings = useSiteSettings();
+  const [form, setForm] = useState<AdditionalSettings>(() => parseAdditionalSettings());
+  const [sectionVisibility, setSectionVisibility] = useState<AdminSettingsVisibility>(() =>
+    parseAdminSettingsVisibility(storedSettings.admin_settings_visibility)
+  );
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  const [visibilitySaving, setVisibilitySaving] = useState(false);
+  const [visibilityMessage, setVisibilityMessage] = useState('');
+
+  useEffect(() => {
+    setForm(parseAdditionalSettings(storedSettings.additional_settings));
+  }, [storedSettings.additional_settings]);
+
+  useEffect(() => {
+    setSectionVisibility(parseAdminSettingsVisibility(storedSettings.admin_settings_visibility));
+  }, [storedSettings.admin_settings_visibility]);
+
+  const update = <K extends keyof AdditionalSettings>(key: K, value: AdditionalSettings[K]) =>
+    setForm(current => ({ ...current, [key]: value }));
+
+  const saveSectionVisibility = async () => {
+    setVisibilitySaving(true);
+    setVisibilityMessage('');
+    try {
+      const response = await fetch(`${API}/settings/admin_settings_visibility`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: JSON.stringify(sectionVisibility) }),
+      });
+      if (response.status === 401) {
+        setVisibilityMessage('error:Admin session expired. Sign out, then sign in again to save settings.');
+        return;
+      }
+      if (!response.ok) throw new Error();
+      window.dispatchEvent(new Event('aggarwal-settings-updated'));
+      setVisibilityMessage('success:Admin settings visibility saved.');
+    } catch {
+      setVisibilityMessage('error:Visibility settings could not be saved. Please try again.');
+    } finally {
+      setVisibilitySaving(false);
+    }
+  };
+
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (form.gstPercent > 100 || form.gstPercent < 0 ||
+      [form.minimumOrderValue, form.deliveryCharge, form.deliveryWaiveMinimum, form.handlingCharge].some(value => value < 0 || !Number.isFinite(value))) {
+      setMessage('error:Enter valid non-negative amounts and a GST rate from 0% to 100%.');
+      return;
+    }
+    setSaving(true);
+    setMessage('');
+    try {
+      const response = await fetch(`${API}/settings/additional_settings`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: JSON.stringify(form) }),
+      });
+      if (response.status === 401) {
+        setMessage('error:Admin session expired. Sign out, then sign in again to save settings.');
+        return;
+      }
+      if (!response.ok) throw new Error();
+      window.dispatchEvent(new Event('aggarwal-settings-updated'));
+      setMessage('success:Additional settings saved. New cart totals will use these values.');
+    } catch {
+      setMessage('error:Settings could not be saved. Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const moneyInput = (label: string, value: number, onChange: (value: number) => void, disabled = false) => (
+    <label className="block max-w-xs text-xs font-bold uppercase tracking-wider">
+      {label}
+      <span className="mt-2 flex items-center rounded-xl border border-input bg-background px-3 text-sm font-normal normal-case">
+        <span className="text-muted-foreground">₹</span>
+        <input type="number" min="0" step="1" value={value}
+          onChange={event => onChange(Number(event.target.value) || 0)} disabled={disabled}
+          className="w-full bg-transparent px-2 py-2.5 outline-none disabled:opacity-50" />
+      </span>
+    </label>
+  );
+  const toggle = (label: string, checked: boolean, onChange: (checked: boolean) => void) => (
+    <label className="flex cursor-pointer items-center gap-3 text-sm font-semibold">
+      <input type="checkbox" checked={checked} onChange={event => onChange(event.target.checked)} className="size-4 accent-primary" />
+      {label}
+    </label>
+  );
+
+  return (
+    <form onSubmit={save} className="max-w-3xl space-y-5">
+      <div>
+        <h2 className="text-xl font-bold">Additional settings</h2>
+        <p className="mt-1 text-sm text-muted-foreground">Set order minimums and optional charges shown to customers before they place an order.</p>
+      </div>
+      <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+        <h3 className="font-semibold">Admin settings sections</h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Choose which sections appear in Admin Settings. Hiding a section only hides its controls; saved values and storefront behavior are unchanged.
+        </p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          {ADMIN_SETTINGS_VISIBILITY_OPTIONS.map(({ key, label }) => (
+            <div key={key} className="flex items-center justify-between gap-4 rounded-xl border border-border p-3">
+              <div>
+                <p className="text-sm font-semibold">{label}</p>
+                <p className="text-xs text-muted-foreground">{sectionVisibility[key] ? 'Visible in Admin Settings' : 'Hidden from Admin Settings'}</p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-label={`Show ${label} in Admin Settings`}
+                aria-checked={sectionVisibility[key]}
+                onClick={() => setSectionVisibility(current => ({ ...current, [key]: !current[key] }))}
+                className={`relative h-8 w-14 shrink-0 rounded-full transition-colors ${sectionVisibility[key] ? 'bg-primary' : 'bg-muted-foreground/40'}`}
+              >
+                <span className={`absolute top-1 size-6 rounded-full bg-background shadow transition-transform ${sectionVisibility[key] ? 'left-7' : 'left-1'}`} />
+              </button>
+            </div>
+          ))}
+        </div>
+        {visibilityMessage && (
+          <p role="status" className={`mt-4 rounded-xl px-4 py-3 text-sm font-semibold ${visibilityMessage.startsWith('error:') ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'}`}>
+            {visibilityMessage.slice(visibilityMessage.indexOf(':') + 1)}
+          </p>
+        )}
+        <div className="mt-4 flex justify-end">
+          <button
+            type="button"
+            onClick={() => void saveSectionVisibility()}
+            disabled={visibilitySaving}
+            className="rounded-xl border border-primary px-5 py-2.5 text-sm font-bold text-primary hover:bg-primary/5 disabled:opacity-60"
+          >
+            {visibilitySaving ? 'Saving…' : 'Save section visibility'}
+          </button>
+        </div>
+      </div>
+      <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+        <h3 className="font-semibold">Minimum order</h3>
+        <p className="mt-1 text-sm text-muted-foreground">Customers cannot proceed unless their product subtotal meets this amount. Use ₹0 to allow any order size.</p>
+        <div className="mt-4">{moneyInput('Minimum order value', form.minimumOrderValue, value => update('minimumOrderValue', value))}</div>
+      </div>
+      <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+        <h3 className="font-semibold">GST</h3>
+        <p className="mt-1 text-sm text-muted-foreground">When enabled, GST is added to the discounted product subtotal and itemized in cart and checkout.</p>
+        <div className="mt-4 space-y-4">
+          {toggle('Enable GST', form.gstEnabled, value => update('gstEnabled', value))}
+          <label className="block max-w-xs text-xs font-bold uppercase tracking-wider">
+            GST percentage
+            <span className="mt-2 flex items-center rounded-xl border border-input bg-background px-3 text-sm font-normal normal-case">
+              <input type="number" min="0" max="100" step="0.01" value={form.gstPercent}
+                onChange={event => update('gstPercent', Number(event.target.value) || 0)}
+                disabled={!form.gstEnabled} className="w-full bg-transparent py-2.5 outline-none disabled:opacity-50" />
+              <span className="text-muted-foreground">%</span>
+            </span>
+          </label>
+        </div>
+      </div>
+      <div className="grid gap-5 sm:grid-cols-2">
+        <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+          <h3 className="font-semibold">Delivery charge</h3>
+          <p className="mt-1 text-sm text-muted-foreground">A flat charge, automatically waived when the product subtotal reaches the threshold below.</p>
+          <div className="mt-4 space-y-4">
+            {toggle('Enable delivery charge', form.deliveryEnabled, value => update('deliveryEnabled', value))}
+            {moneyInput('Charge amount', form.deliveryCharge, value => update('deliveryCharge', value), !form.deliveryEnabled)}
+            {moneyInput('Waive charge at item subtotal', form.deliveryWaiveMinimum, value => update('deliveryWaiveMinimum', value), !form.deliveryEnabled)}
+            <p className="text-xs text-muted-foreground">The threshold is checked before coupon discounts. Set it to ₹0 to disable the waiver.</p>
+          </div>
+        </div>
+        <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+          <h3 className="font-semibold">Handling charge</h3>
+          <p className="mt-1 text-sm text-muted-foreground">A flat packing or handling charge added while enabled.</p>
+          <div className="mt-4 space-y-4">
+            {toggle('Enable handling charge', form.handlingEnabled, value => update('handlingEnabled', value))}
+            {moneyInput('Charge amount', form.handlingCharge, value => update('handlingCharge', value), !form.handlingEnabled)}
+          </div>
+        </div>
+      </div>
+      {message && <p className={`rounded-xl px-4 py-3 text-sm font-semibold ${message.startsWith('error:') ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'}`}>{message.slice(message.indexOf(':') + 1)}</p>}
+      <div className="flex justify-end">
+        <button type="submit" disabled={saving} className="rounded-xl bg-primary px-6 py-3 text-sm font-bold text-primary-foreground disabled:opacity-60">
+          {saving ? 'Saving…' : 'Save additional settings'}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
+  const storedSettings = useSiteSettings();
+  const sectionVisibility = parseAdminSettingsVisibility(storedSettings.admin_settings_visibility);
   const [currentPw, setCurrentPw] = useState('');
   const [newPw, setNewPw] = useState('');
   const [confirmPw, setConfirmPw] = useState('');
@@ -3601,6 +5069,8 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
   const [pwMsg, setPwMsg] = useState('');
   const [storeInfo, setStoreInfo] = useState<Record<string, string>>({});
   const [storeMsg, setStoreMsg] = useState('');
+  const [codSaving, setCodSaving] = useState(false);
+  const [codMsg, setCodMsg] = useState('');
   const [logoMsg, setLogoMsg] = useState('');
   const [dangerMsg, setDangerMsg] = useState('');
   // Local editable states (saved only on button click)
@@ -3608,6 +5078,10 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
   const [catsSaved, setCatsSaved] = useState(false);
   const [localSlides, setLocalSlides] = useState<HeroSlide[]>([]);
   const [slidesSaved, setSlidesSaved] = useState(false);
+  const [slidesSaving, setSlidesSaving] = useState(false);
+  const [slideReads, setSlideReads] = useState(0);
+  const [slidesMsg, setSlidesMsg] = useState('');
+  const [slideImageErrors, setSlideImageErrors] = useState<Record<string, string>>({});
   const [localUnits, setLocalUnits] = useState<string[]>([]);
   const [unitsSaved, setUnitsSaved] = useState(false);
   const [localPromo, setLocalPromo] = useState<string[]>([]);
@@ -3617,6 +5091,30 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
 
   const defaults: Record<string, string> = { name: 'Aggarwal Sweets', address: '12, Hissar Road, Sirsa', phone: '01666234786', hours: '9:00 AM – 9:30 PM' };
   const si = { ...defaults, ...storeInfo };
+  const codEnabled = storeInfo.cod_enabled !== 'false';
+
+  const toggleCod = async () => {
+    setCodSaving(true);
+    setCodMsg('');
+    const next = !codEnabled;
+    try {
+      const response = await fetch(`${API}/settings/cod_enabled`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: String(next) }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(typeof result.error === 'string' ? result.error : 'Could not update cash on delivery.');
+      setStoreInfo(current => ({ ...current, cod_enabled: String(next) }));
+      window.dispatchEvent(new Event('aggarwal-settings-updated'));
+      setCodMsg(`ok:Cash on delivery ${next ? 'enabled' : 'disabled'}.`);
+    } catch (error) {
+      setCodMsg(`error:${error instanceof Error ? error.message : 'Could not update cash on delivery.'}`);
+    } finally {
+      setCodSaving(false);
+    }
+  };
 
   // Load settings from DB on mount — initialise local states
   useEffect(() => {
@@ -3662,11 +5160,23 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
   };
 
   const saveSlides = async () => {
-    const val = JSON.stringify(localSlides);
-    await fetch(`${API}/settings/hero_slides`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: val }) });
-    setStoreInfo(s => ({ ...s, hero_slides: val }));
-    window.dispatchEvent(new Event('aggarwal-settings-updated'));
-    setSlidesSaved(true); setTimeout(() => setSlidesSaved(false), 2500);
+    setSlidesSaving(true);
+    setSlidesMsg('');
+    setSlidesSaved(false);
+    try {
+      const val = JSON.stringify(localSlides);
+      const body = JSON.stringify({ value: val });
+      checkImageSaveSize(body);
+      const response = await fetch(`${API}/settings/hero_slides`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body });
+      await requireImageSave(response, 'Saving the slider');
+      setStoreInfo(s => ({ ...s, hero_slides: val }));
+      window.dispatchEvent(new Event('aggarwal-settings-updated'));
+      setSlidesSaved(true); setTimeout(() => setSlidesSaved(false), 2500);
+    } catch (error) {
+      setSlidesMsg(error instanceof Error ? error.message : 'Could not save the slider. Please try again.');
+    } finally {
+      setSlidesSaving(false);
+    }
   };
 
   const saveUnits = async () => {
@@ -3696,17 +5206,23 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
 
   const saveStoreInfo = async (e: React.FormEvent) => {
     e.preventDefault();
-    await Promise.all(
-      Object.entries(si).map(([key, value]) =>
-        fetch(`${API}/settings/${key}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ value }),
+    setStoreMsg('');
+    try {
+      await Promise.all(
+        Object.keys(defaults).map(async key => {
+          const response = await fetch(`${API}/settings/${key}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ value: si[key] }),
+          });
+          await requireImageSave(response, 'Saving store information');
         })
-      )
-    );
-    setStoreMsg('ok:Store info saved!');
-    setTimeout(() => setStoreMsg(''), 3000);
+      );
+      setStoreMsg('ok:Store info saved!');
+      setTimeout(() => setStoreMsg(''), 3000);
+    } catch (error) {
+      setStoreMsg(`error:${error instanceof Error ? error.message : 'Could not save store information.'}`);
+    }
   };
 
   const msgCls = (msg: string) => msg.startsWith('ok:') ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700';
@@ -3714,8 +5230,25 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
 
   return (
     <div className="max-w-2xl space-y-6">
+      <div hidden={!sectionVisibility.paymentMethods} className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+        <h3 className="font-semibold">Payment methods</h3>
+        <p className="mt-1 text-sm text-muted-foreground">Choose whether customers can place new cash-on-delivery orders. Existing COD orders remain visible and can still be completed.</p>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border p-4">
+          <div>
+            <p className="text-sm font-semibold">Cash on delivery</p>
+            <p className="text-xs text-muted-foreground">{codEnabled ? 'Available at checkout' : 'Hidden from checkout'}</p>
+          </div>
+          <button type="button" role="switch" aria-label="Cash on delivery" aria-checked={codEnabled}
+            disabled={codSaving} onClick={() => void toggleCod()}
+            className={`relative h-9 w-16 rounded-full transition-colors disabled:opacity-60 ${codEnabled ? 'bg-primary' : 'bg-muted-foreground/40'}`}>
+            <span className={`absolute top-1 size-7 rounded-full bg-background shadow transition-transform ${codEnabled ? 'left-8' : 'left-1'}`} />
+          </button>
+        </div>
+        <p className="mt-3 text-xs text-muted-foreground">Razorpay must be configured before you can turn COD off, so customers always have a way to pay.</p>
+        {codMsg && <p role="status" className={`mt-3 rounded-xl px-4 py-2 text-xs font-bold ${codMsg.startsWith('ok:') ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{codMsg.replace(/^(ok|error):/, '')}</p>}
+      </div>
       {/* Profile card */}
-      <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+      <div hidden={!sectionVisibility.adminAccount} className="rounded-2xl border border-border bg-background p-6 shadow-sm">
         <h3 className="font-semibold">Admin account</h3>
         <div className="mt-4 flex items-center gap-4">
           <div className="grid size-14 place-items-center rounded-full bg-primary text-xl font-bold text-primary-foreground">A</div>
@@ -3728,7 +5261,7 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
       </div>
 
       {/* Change password */}
-      <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+      <div hidden={!sectionVisibility.changePassword} className="rounded-2xl border border-border bg-background p-6 shadow-sm">
         <h3 className="font-semibold">Change password</h3>
         <p className="mt-1 text-sm text-muted-foreground">Default: <code className="rounded bg-muted px-1.5 py-0.5 text-xs">Admin@123</code></p>
         <form onSubmit={handleChangePw} className="mt-4 space-y-3">
@@ -3756,7 +5289,7 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
       </div>
 
       {/* Store info */}
-      <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+      <div hidden={!sectionVisibility.storeInformation} className="rounded-2xl border border-border bg-background p-6 shadow-sm">
         <h3 className="font-semibold">Store information</h3>
         <form onSubmit={saveStoreInfo} className="mt-4 space-y-3">
           {[
@@ -3777,9 +5310,9 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
       </div>
 
       {/* Logo */}
-      <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+      <div hidden={!sectionVisibility.storeLogo} className="rounded-2xl border border-border bg-background p-6 shadow-sm">
         <h3 className="font-semibold">Store logo</h3>
-        <p className="mt-1 text-sm text-muted-foreground">Upload a logo image. Appears in the header instead of the text mark.</p>
+        <p className="mt-1 text-sm text-muted-foreground">Upload a logo image. Appears in the header instead of the text mark. {IMAGE_UPLOAD_HINT}</p>
         <div className="mt-4 flex flex-col gap-3">
           {storeInfo.logo_url && (
             <div className="flex items-center gap-3">
@@ -3803,33 +5336,32 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
             </div>
           )}
           <input type="file" accept="image/*" onChange={async e => {
-            const file = e.target.files?.[0]; if (!file) return;
+            const file = e.target.files?.[0]; e.target.value = '';
+            if (!file) return;
             setLogoMsg('');
-            const reader = new FileReader();
-            reader.onloadend = async () => {
-              const b64 = reader.result as string;
-              try {
-                const response = await fetch(`${API}/settings/logo_url`, {
-                  method: 'PUT',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ value: b64 }),
-                });
-                if (!response.ok) throw new Error();
-                setStoreInfo(s => ({ ...s, logo_url: b64 }));
-                window.dispatchEvent(new Event('aggarwal-settings-updated'));
-                setLogoMsg('ok:Logo saved successfully.');
-              } catch {
-                setLogoMsg('error:Logo could not be saved. Please try a smaller image.');
-              }
-            };
-            reader.readAsDataURL(file);
+            try {
+              const image = await readAdminImage(file);
+              const body = JSON.stringify({ value: image });
+              checkImageSaveSize(body);
+              const response = await fetch(`${API}/settings/logo_url`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body,
+              });
+              await requireImageSave(response, 'Saving the logo');
+              setStoreInfo(s => ({ ...s, logo_url: image }));
+              window.dispatchEvent(new Event('aggarwal-settings-updated'));
+              setLogoMsg('ok:Logo saved successfully.');
+            } catch (error) {
+              setLogoMsg(`error:${error instanceof Error ? error.message : 'Could not save the logo. Please try again.'}`);
+            }
           }} className="rounded-xl border border-input px-4 py-2.5 text-sm" />
           {logoMsg && <p className={`rounded-xl px-4 py-2 text-xs font-bold ${msgCls(logoMsg)}`}>{msgTxt(logoMsg)}</p>}
         </div>
       </div>
 
       {/* Brand colours */}
-      <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+      <div hidden={!sectionVisibility.brandColours} className="rounded-2xl border border-border bg-background p-6 shadow-sm">
         <h3 className="font-semibold">Brand colours</h3>
         <p className="mt-1 text-sm text-muted-foreground">Changes apply instantly to the storefront.</p>
         <div className="mt-4 grid grid-cols-3 gap-4">
@@ -3860,7 +5392,7 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
       </div>
 
        {/* Hero slider config */}
-      <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+       <div hidden={!sectionVisibility.heroSlider} className="rounded-2xl border border-border bg-background p-6 shadow-sm">
         <h3 className="font-semibold">Hero slider</h3>
          <p className="mt-1 text-sm text-muted-foreground">Add as many homepage banner slides as you need. Each slide supports a URL or local image upload.</p>
         <div className="mt-4 space-y-4">
@@ -3898,18 +5430,24 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
                  <div className="sm:col-span-2">
                    <label className="text-[10px] font-bold uppercase tracking-wider">Hero image</label>
                    <div className="mt-1 flex flex-col gap-2 sm:flex-row">
-                     <input value={slide.image} onChange={e => setLocalSlides(ss => ss.map((s, i) => i === idx ? { ...s, image: e.target.value } : s))}
+                      <input value={slide.image} onChange={e => { setSlideImageErrors(errors => ({ ...errors, [slide.id]: '' })); setLocalSlides(ss => ss.map((s, i) => i === idx ? { ...s, image: e.target.value } : s)); }}
                        placeholder="/hero-mithai.jpg or https://…" className="min-w-0 flex-1 rounded-xl border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
                      <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-input px-3 py-2 text-xs font-bold hover:bg-muted">
                        <Upload className="size-3.5" /> Browse image
                        <input type="file" accept="image/*" className="hidden" onChange={e => {
-                         const file = e.target.files?.[0]; if (!file) return;
-                         const reader = new FileReader();
-                         reader.onloadend = () => setLocalSlides(ss => ss.map((s, i) => i === idx ? { ...s, image: reader.result as string } : s));
-                         reader.readAsDataURL(file);
+                          const file = e.target.files?.[0]; e.target.value = '';
+                          if (!file) return;
+                          setSlideImageErrors(errors => ({ ...errors, [slide.id]: '' }));
+                          setSlideReads(count => count + 1);
+                          void readAdminImage(file)
+                            .then(image => setLocalSlides(ss => ss.map((s, i) => i === idx ? { ...s, image } : s)))
+                            .catch(error => setSlideImageErrors(errors => ({ ...errors, [slide.id]: error.message })))
+                            .finally(() => setSlideReads(count => count - 1));
                        }} />
                      </label>
                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">{IMAGE_UPLOAD_HINT}</p>
+                    {slideImageErrors[slide.id] && <p role="alert" className="mt-1 text-xs text-red-600">{slideImageErrors[slide.id]}</p>}
                    {slide.image && <img src={slide.image} alt="" className="mt-2 h-24 w-full rounded-xl border border-border object-cover" />}
                  </div>
                 <div className="sm:col-span-2">
@@ -3945,17 +5483,18 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
              <Plus className="size-4" /> Add another slide
            </button>
           <div className="flex items-center justify-end gap-3 pt-1">
+            {slidesMsg && <span role="alert" className="text-xs font-semibold text-red-600">{slidesMsg}</span>}
             {slidesSaved && <span className="text-xs font-semibold text-green-600">✓ Saved!</span>}
-            <button type="button" onClick={saveSlides}
-              className="rounded-xl bg-primary px-5 py-2 text-sm font-bold text-primary-foreground hover:opacity-90">
-              Save slider
+             <button type="button" onClick={saveSlides} disabled={slidesSaving || slideReads > 0 || localSlides.some(slide => Boolean(slideImageErrors[slide.id]))}
+               className="rounded-xl bg-primary px-5 py-2 text-sm font-bold text-primary-foreground hover:opacity-90 disabled:opacity-60">
+               {slidesSaving ? 'Saving…' : slideReads > 0 ? 'Reading image…' : 'Save slider'}
             </button>
           </div>
         </div>
       </div>
 
       {/* Promo strip (top ticker) */}
-      <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+      <div hidden={!sectionVisibility.announcementStrip} className="rounded-2xl border border-border bg-background p-6 shadow-sm">
         <h3 className="font-semibold">Top announcement strip</h3>
         <p className="mt-1 text-sm text-muted-foreground">The scrolling green ticker at the very top of every page. Add, edit, or remove messages.</p>
         <div className="mt-4 space-y-2">
@@ -3979,7 +5518,7 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
       </div>
 
       {/* Benefit strip (below nav) */}
-      <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+      <div hidden={!sectionVisibility.benefitStrip} className="rounded-2xl border border-border bg-background p-6 shadow-sm">
         <h3 className="font-semibold">Benefit strip</h3>
         <p className="mt-1 text-sm text-muted-foreground">The red scrolling strip just below the navigation bar. Icons cycle automatically.</p>
         <div className="mt-4 space-y-2">
@@ -4003,7 +5542,7 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
       </div>
 
       {/* Categories pointer */}
-      <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+      <div hidden={!sectionVisibility.categories} className="rounded-2xl border border-border bg-background p-6 shadow-sm">
         <div className="flex items-start gap-4">
           <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
             <LayoutList className="size-5" />
@@ -4016,7 +5555,7 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
       </div>
 
       {/* Unit presets */}
-      <div className="rounded-2xl border border-border bg-background p-6 shadow-sm">
+      <div hidden={!sectionVisibility.unitPresets} className="rounded-2xl border border-border bg-background p-6 shadow-sm">
         <h3 className="font-semibold">Unit presets</h3>
         <p className="mt-1 text-sm text-muted-foreground">Manage the unit options shown in the product form (e.g. 250 gm, 500 gm, per piece). Products can still use free-text units.</p>
         <div className="mt-4 space-y-2">
@@ -4049,12 +5588,21 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
       </div>
 
       {/* Danger zone */}
-      <div className="rounded-2xl border border-red-200 bg-background p-6 shadow-sm">
+      <div hidden={!sectionVisibility.dangerZone} className="rounded-2xl border border-red-200 bg-background p-6 shadow-sm">
         <h3 className="font-semibold text-red-600">Danger zone</h3>
         <p className="mt-1 text-sm text-muted-foreground">These actions cannot be undone.</p>
         <div className="mt-4 space-y-3">
           {[
-            { label: 'Clear all orders', desc: 'Removes all order records from DB', action: async () => { await fetch(`${API}/orders/clear`, { method: 'DELETE' }).catch(() => {}); setDangerMsg('ok:Orders cleared.'); } },
+            { label: 'Clear all orders', desc: 'Only available when no payment history exists; financial records are protected.', action: async () => {
+              try {
+                const response = await fetch(`${API}/orders/clear`, { method: 'DELETE', credentials: 'include' });
+                const body = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(typeof body.error === 'string' ? body.error : 'Orders could not be cleared.');
+                setDangerMsg('ok:Orders cleared.');
+              } catch (error) {
+                setDangerMsg(`error:${error instanceof Error ? error.message : 'Orders could not be cleared.'}`);
+              }
+            } },
             { label: 'Clear customer list', desc: 'Removes all registered customers from DB', action: async () => { await fetch(`${API}/customers/clear`, { method: 'DELETE' }).catch(() => {}); setDangerMsg('ok:Customers cleared.'); } },
             { label: 'Reset product catalogue', desc: 'Restores the original product list', action: async () => { await fetch(`${API}/products/reset`, { method: 'POST' }).catch(() => {}); window.dispatchEvent(new Event('aggarwal-catalog-updated')); setDangerMsg('ok:Catalogue reset to defaults. Refresh to see changes.'); } },
           ].map(({ label, desc, action }) => (
@@ -4085,11 +5633,14 @@ function AdminSectionBlog({ posts, onRefresh }: { posts: BlogPost[]; onRefresh: 
   const [saving, setSaving] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [imageTab, setImageTab] = useState<'url' | 'upload'>('url');
+  const [imageError, setImageError] = useState('');
+  const [saveError, setSaveError] = useState('');
+  const [imageLoading, setImageLoading] = useState(false);
 
-  const openAdd = () => { setForm(BLANK_BLOG); setEditingId(null); setImageTab('url'); setModalOpen(true); };
+  const openAdd = () => { setForm(BLANK_BLOG); setEditingId(null); setImageTab('url'); setImageError(''); setSaveError(''); setModalOpen(true); };
   const openEdit = (p: BlogPost) => {
     setForm({ title: p.title, slug: p.slug, excerpt: p.excerpt, date: p.date, readTime: p.readTime, category: p.category, image: p.image, body: Array.isArray(p.body) ? p.body.join('\n\n') : '' });
-    setEditingId(p.id); setImageTab('url'); setModalOpen(true);
+    setEditingId(p.id); setImageTab('url'); setImageError(''); setSaveError(''); setModalOpen(true);
   };
   const fi = (field: keyof BlogForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setForm(f => ({ ...f, [field]: e.target.value }));
 
@@ -4098,13 +5649,20 @@ function AdminSectionBlog({ posts, onRefresh }: { posts: BlogPost[]; onRefresh: 
     const bodyArr = form.body.split(/\n\n+/).map(s => s.trim()).filter(Boolean);
     const payload = { ...form, body: bodyArr, slug: form.slug || form.title.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') };
     setSaving(true);
+    setSaveError('');
     try {
+      const body = JSON.stringify(editingId ? payload : { ...payload, id: payload.slug + '-' + Date.now() });
+      checkImageSaveSize(body);
+      let response: Response;
       if (editingId) {
-        await fetch(`${API}/blog/${editingId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        response = await fetch(`${API}/blog/${editingId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body });
       } else {
-        await fetch(`${API}/blog`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, id: payload.slug + '-' + Date.now() }) });
+        response = await fetch(`${API}/blog`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
       }
+      await requireImageSave(response, 'Saving the post');
       setModalOpen(false); onRefresh();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Could not save the post. Please try again.');
     } finally { setSaving(false); }
   };
 
@@ -4182,7 +5740,7 @@ function AdminSectionBlog({ posts, onRefresh }: { posts: BlogPost[]; onRefresh: 
                 <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Image</label>
                 <div className="mb-2 flex rounded-xl border border-border overflow-hidden">
                   {(['url', 'upload'] as const).map(t => (
-                    <button key={t} type="button" onClick={() => setImageTab(t)}
+                     <button key={t} type="button" onClick={() => { setImageTab(t); setImageError(''); }}
                       className={`flex-1 py-2 text-xs font-bold capitalize ${imageTab === t ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}>
                       {t === 'url' ? 'URL' : 'Upload'}
                     </button>
@@ -4192,21 +5750,28 @@ function AdminSectionBlog({ posts, onRefresh }: { posts: BlogPost[]; onRefresh: 
                   <input value={form.image} onChange={fi('image')} placeholder="/hero-mithai.jpg or https://…" className="w-full rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
                 ) : (
                   <input type="file" accept="image/*" onChange={e => {
-                    const file = e.target.files?.[0]; if (!file) return;
-                    const reader = new FileReader();
-                    reader.onloadend = () => setForm(f => ({ ...f, image: reader.result as string }));
-                    reader.readAsDataURL(file);
+                    const file = e.target.files?.[0]; e.target.value = '';
+                    if (!file) return;
+                    setImageError('');
+                    setImageLoading(true);
+                    void readAdminImage(file)
+                      .then(image => setForm(f => ({ ...f, image })))
+                      .catch(error => setImageError(error.message))
+                      .finally(() => setImageLoading(false));
                   }} className="w-full rounded-xl border border-input px-4 py-2.5 text-sm" />
                 )}
+                <p className="mt-1 text-xs text-muted-foreground">{IMAGE_UPLOAD_HINT}</p>
+                {imageError && <p role="alert" className="mt-1 text-xs text-red-600">{imageError}</p>}
                 {form.image && <img src={form.image} alt="" className="mt-2 h-20 w-20 rounded-xl object-cover border border-border" />}
               </div>
               <div>
                 <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider">Body (separate paragraphs with a blank line)</label>
                 <textarea rows={8} value={form.body} onChange={fi('body')} placeholder="First paragraph…&#10;&#10;Second paragraph…" className="w-full resize-y rounded-xl border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring" />
               </div>
+              {saveError && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{saveError}</p>}
               <div className="flex gap-3 pt-2 pb-1">
                 <button type="button" onClick={() => setModalOpen(false)} className="flex-1 rounded-xl border border-border py-3 text-sm font-bold">Cancel</button>
-                <button type="submit" disabled={saving} className="flex-1 rounded-xl bg-primary py-3 text-sm font-bold text-primary-foreground disabled:opacity-60">{saving ? 'Saving…' : editingId ? 'Save changes' : 'Publish post'}</button>
+                <button type="submit" disabled={saving || imageLoading || Boolean(imageError)} className="flex-1 rounded-xl bg-primary py-3 text-sm font-bold text-primary-foreground disabled:opacity-60">{saving ? 'Saving…' : imageLoading ? 'Reading image…' : editingId ? 'Save changes' : 'Publish post'}</button>
               </div>
             </form>
           </div>
@@ -4342,6 +5907,21 @@ function AdminSectionCoupons({ coupons, onRefresh }: { coupons: CouponCode[]; on
 function AdminPage() {
   const [user, setUser] = useState<AuthUser | null>(readUser);
   const isAdmin = user?.role === 'admin';
+  const [sessionCheckDone, setSessionCheckDone] = useState(false);
+
+  useEffect(() => {
+    if (!isAdmin || sessionCheckDone) return;
+    let active = true;
+    void apiCheckAdminSession().then(result => {
+      if (!active) return;
+      if (result === 'invalid') {
+        localStorage.removeItem('aggarwal-user');
+        setUser(null);
+      }
+      setSessionCheckDone(true);
+    });
+    return () => { active = false; };
+  }, [isAdmin, sessionCheckDone]);
 
   const handleLogout = async () => {
     await apiLogout();
@@ -4349,6 +5929,9 @@ function AdminPage() {
     setUser(null);
   };
 
+  if (isAdmin && !sessionCheckDone) {
+    return <div className="grid min-h-[100dvh] place-items-center"><Loader2 className="size-6 animate-spin text-primary" aria-label="Checking admin session" /></div>;
+  }
   if (!isAdmin) return <AdminLoginScreen onLogin={setUser} />;
   return <AdminDashboard adminUser={user!} onLogout={handleLogout} />;
 }
@@ -4387,11 +5970,57 @@ function FloatingButtons() {
 
 // ─── Account Page ─────────────────────────────────────────────────────────────
 const ORDER_STATUSES: Record<OrderStatus, { label: string; color: string }> = {
+  'Awaiting payment': { label: 'Awaiting payment', color: 'bg-amber-100 text-amber-800' },
+  'Payment failed': { label: 'Payment failed', color: 'bg-red-100 text-red-800' },
   Confirmed:         { label: 'Confirmed', color: 'bg-blue-100 text-blue-700' },
   Packing:           { label: 'Being packed', color: 'bg-amber-100 text-amber-700' },
   'Out for delivery':{ label: 'Out for delivery', color: 'bg-orange-100 text-orange-700' },
   Delivered:         { label: 'Delivered', color: 'bg-green-100 text-green-700' },
 };
+
+function CustomerPaymentRetry({ order }: { order: OrderRecord }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  if (order.paymentMethod !== 'razorpay' || order.paymentStatus === 'paid' || order.paymentStatus === 'refunded') return null;
+  const retry = async () => {
+    setBusy(true); setError('');
+    try {
+      const response = await apiStartOrderCheckout(order.id);
+      window.dispatchEvent(new Event('aggarwal-order-updated'));
+      if (response.alreadyPaid || response.order.paymentStatus === 'paid') return;
+      if (!response.checkout) throw new Error('Payment is being checked. Refresh My Orders before trying again.');
+      await loadRazorpayCheckout();
+      if (!window.Razorpay) throw new Error('Secure checkout is unavailable in this browser.');
+      new window.Razorpay({
+        key: response.checkout.keyId, order_id: response.checkout.gatewayOrderId,
+        amount: response.checkout.amountPaise, currency: response.checkout.currency,
+        name: 'Aggarwal Sweets', description: `Order ${order.id}`,
+        prefill: { name: order.customerName ?? '', email: order.customerEmail ?? '', contact: order.phone },
+        theme: { color: '#184f3e' },
+        handler: async (fields: { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string }) => {
+          try {
+            const verified = await apiVerifyRazorpay(fields);
+            if (verified.paymentStatus !== 'paid') throw new Error('Payment is not confirmed yet. Refresh My Orders before paying again.');
+            window.dispatchEvent(new Event('aggarwal-order-updated'));
+          } catch (reason) {
+            setError(reason instanceof Error ? reason.message : 'Payment status is not confirmed. Check My Orders before paying again.');
+          } finally { setBusy(false); }
+        },
+        modal: { ondismiss: () => setBusy(false) },
+      }).open();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Could not check this order payment.');
+      setBusy(false);
+    }
+  };
+  return <div className="mt-3">
+    <button type="button" disabled={busy} onClick={() => void retry()} className="inline-flex min-h-10 items-center gap-2 rounded-full border border-primary px-4 py-2 text-xs font-bold text-primary disabled:opacity-60">
+      {busy ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCcw className="size-3.5" />}
+      Check order and retry payment
+    </button>
+    {error && <p role="alert" className="mt-2 text-xs text-destructive">{error}</p>}
+  </div>;
+}
 
 function AccountPage({ user, wishlist, orders, catalog, onAuthOpen, onLogout, onUserUpdate, onWishlist, onDetail }: {
   user: AuthUser | null;
@@ -4407,9 +6036,12 @@ function AccountPage({ user, wishlist, orders, catalog, onAuthOpen, onLogout, on
   const [, navigate] = useLocation();
   const searchStr = typeof window !== 'undefined' ? window.location.search : '';
   const urlTab = new URLSearchParams(searchStr).get('tab') ?? 'orders';
-  const [tab, setTab] = useState<'orders' | 'wishlist' | 'profile' | 'addresses'>(
-    (['orders', 'wishlist', 'profile', 'addresses'] as const).includes(urlTab as 'orders') ? urlTab as 'orders' : 'orders'
+  const [tab, setTab] = useState<'orders' | 'payments' | 'wishlist' | 'profile' | 'addresses'>(
+    (['orders', 'payments', 'wishlist', 'profile', 'addresses'] as const).includes(urlTab as 'orders') ? urlTab as 'orders' : 'orders'
   );
+  const [payments, setPayments] = useState<PaymentRecord[]>([]);
+  const [paymentsLoading, setPaymentsLoading] = useState(false);
+  const [paymentsError, setPaymentsError] = useState('');
   const [name, setName] = useState(user?.name ?? '');
   const [nameSaved, setNameSaved] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
@@ -4422,6 +6054,14 @@ function AccountPage({ user, wishlist, orders, catalog, onAuthOpen, onLogout, on
   useEffect(() => {
     setName(user?.name ?? '');
   }, [user?.email, user?.name]);
+
+  const loadPayments = async () => {
+    setPaymentsLoading(true); setPaymentsError('');
+    try { setPayments(await apiFetchPayments(true)); }
+    catch (error) { setPaymentsError(error instanceof Error ? error.message : 'Could not load payment history.'); }
+    finally { setPaymentsLoading(false); }
+  };
+  useEffect(() => { if (user && tab === 'payments') void loadPayments(); }, [user?.email, tab]);
 
   const wishlisted = catalog.filter(p => wishlist.includes(p.id));
 
@@ -4440,6 +6080,7 @@ function AccountPage({ user, wishlist, orders, catalog, onAuthOpen, onLogout, on
 
   const tabs: { key: typeof tab; label: string; icon: typeof UserRound }[] = [
     { key: 'orders', label: 'My Orders', icon: ListOrdered },
+    { key: 'payments', label: 'Payment History', icon: Banknote },
     { key: 'wishlist', label: 'Wishlist', icon: Heart },
     { key: 'profile', label: 'Profile', icon: UserRound },
     { key: 'addresses', label: 'Addresses', icon: MapPin },
@@ -4509,13 +6150,18 @@ function AccountPage({ user, wishlist, orders, catalog, onAuthOpen, onLogout, on
                       <div key={order.id} className="rounded-2xl border border-border bg-background p-4 shadow-sm sm:p-5">
                         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                           <div className="min-w-0">
-                            <p className="font-mono-ui text-xs text-muted-foreground">{order.date}</p>
+                            <p className="font-mono-ui text-xs text-muted-foreground">{formatOrderDate(order.date)}</p>
                             <p className="mt-1 break-all font-display text-lg font-semibold">{order.id}</p>
                             <p className="text-xs text-muted-foreground">{order.items.reduce((s, l) => s + l.quantity, 0)} items · {money(order.subtotal)}</p>
                           </div>
                           <span className={`self-start whitespace-nowrap rounded-full px-3 py-1 text-xs font-bold ${ORDER_STATUSES[order.status].color}`}>
                             {ORDER_STATUSES[order.status].label}
                           </span>
+                        </div>
+                        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border pt-3 text-xs">
+                          <span className="text-muted-foreground">Payment</span>
+                          <b>{order.paymentMethod === 'razorpay' ? 'Online · Razorpay' : 'Cash on delivery'}</b>
+                          <span className={`rounded-full px-2.5 py-1 font-bold ${order.paymentStatus === 'paid' ? 'bg-emerald-100 text-emerald-800' : order.paymentStatus === 'failed' || order.paymentStatus === 'refunded' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}`}>{order.paymentStatus ?? 'pending'}</span>
                         </div>
                         {/* Items */}
                         <div className="mt-4 grid gap-2 sm:flex sm:flex-wrap sm:gap-3">
@@ -4540,6 +6186,7 @@ function AccountPage({ user, wishlist, orders, catalog, onAuthOpen, onLogout, on
                             <span className="ml-1.5">{order.address}</span>
                           </p>
                         )}
+                        <CustomerPaymentRetry order={order} />
                         {order.status === 'Delivered' && (order.receiverName || order.deliveryContact || order.deliveryRemarks) && (
                           <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-emerald-950">
                             <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-700">
@@ -4557,6 +6204,41 @@ function AccountPage({ user, wishlist, orders, catalog, onAuthOpen, onLogout, on
                   </div>
                 )}
               </div>
+            )}
+
+            {tab === 'payments' && (
+              <section>
+                <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+                  <div><h2 className="font-display text-2xl">Payment History</h2><p className="mt-1 text-sm text-muted-foreground">Every payment attempt tied to your orders.</p></div>
+                  <button type="button" onClick={() => void loadPayments()} disabled={paymentsLoading} className="inline-flex items-center gap-2 rounded-full border border-border px-4 py-2 text-xs font-bold disabled:opacity-60">
+                    <RefreshCw className={`size-3.5 ${paymentsLoading ? 'animate-spin' : ''}`} /> Refresh
+                  </button>
+                </div>
+                {paymentsError && <div className="mb-4 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive" role="alert">
+                  <p>{paymentsError}</p><button onClick={() => void loadPayments()} className="mt-2 font-bold underline">Try again</button>
+                </div>}
+                {paymentsLoading && payments.length === 0 ? <div className="space-y-3">{[0, 1].map(item => <div key={item} className="h-24 animate-pulse rounded-2xl bg-muted" />)}</div>
+                  : payments.length === 0 ? <div className="rounded-2xl border border-border bg-background p-10 text-center">
+                    <Banknote className="mx-auto size-8 text-muted-foreground/50" /><p className="mt-3 font-display text-xl">No payment history yet</p>
+                    <p className="mt-1 text-sm text-muted-foreground">Your COD collection and online payment attempts appear here.</p>
+                  </div> : <div className="space-y-3">{payments.map(payment => (
+                    <article key={payment.id} className="rounded-2xl border border-border bg-background p-4 shadow-sm sm:p-5">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0"><p className="text-xs text-muted-foreground">{formatOrderDate(payment.createdAt)}</p>
+                          <p className="mt-1 break-all font-mono-ui text-xs font-bold">Order {payment.orderId}</p>
+                          <p className="mt-1 text-xs text-muted-foreground">{payment.method === 'razorpay' ? 'Razorpay online payment' : 'Cash on delivery'}</p>
+                        </div>
+                        <div className="text-right"><b>{money(payment.amountPaise / 100)}</b><span className={`mt-1 block w-fit rounded-full px-2.5 py-1 text-[11px] font-bold ${paymentBadgeClass(payment.status)}`}>{paymentStatusLabel(payment.status)}</span></div>
+                      </div>
+                      <div className="mt-3 space-y-1 border-t border-border pt-3 text-[11px] text-muted-foreground">
+                        <p className="break-all">Payment record: <span className="font-mono-ui text-foreground">{payment.id}</span></p>
+                        {payment.gatewayPaymentId && <p className="break-all">Gateway payment: <span className="font-mono-ui text-foreground">{payment.gatewayPaymentId}</span></p>}
+                        {payment.refundedPaise > 0 && <p>Refunded: {money(payment.refundedPaise / 100)}</p>}
+                        {payment.failureReason && <p className="break-words text-destructive">{payment.failureReason}</p>}
+                      </div>
+                    </article>
+                  ))}</div>}
+              </section>
             )}
 
             {/* Wishlist Tab */}
@@ -4761,6 +6443,10 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
   }, []);
 
   const addToCart = (product: Product, variant = defaultVariant(product)) => {
+    if (!productAvailability(catalog.find(item => item.id === product.id) ?? product, siteSettings, new Date())) {
+      window.alert('This product is currently unavailable. Please check its available hours.');
+      return;
+    }
     setCart(curr => {
       const existing = curr.find(l => l.product.id === product.id && l.variant.weight === variant.weight && l.variant.material === variant.material);
       if (existing) return curr.map(l => l === existing ? { ...l, quantity: l.quantity + 1 } : l);
@@ -4780,7 +6466,8 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
   const itemCount = cart.reduce((s, l) => s + l.quantity, 0);
   const subtotal = cart.reduce((s, l) => s + l.variant.price * l.quantity, 0);
   const discount = coupon?.discount ?? 0;
-  const finalTotal = Math.max(0, subtotal - discount);
+  const additionalSettings = parseAdditionalSettings(siteSettings.additional_settings);
+  const pricing = calculateOrderPricing(subtotal, discount, additionalSettings, coupon?.code);
 
   const handleApplyCoupon = async (code: string): Promise<string | null> => {
     try {
@@ -4835,6 +6522,14 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
   };
 
   const handleProceedCheckout = async () => {
+    if (subtotal < additionalSettings.minimumOrderValue) {
+      window.alert(`The minimum order is ${money(additionalSettings.minimumOrderValue)}.`);
+      return;
+    }
+    if (cart.some(line => !productAvailability(line.product, siteSettings, new Date()))) {
+      window.alert('One or more items are currently unavailable. Please review your cart.');
+      return;
+    }
     setCartOpen(false);
     if (!user || user.role !== 'customer') {
       requireCustomerSignIn();
@@ -4898,7 +6593,7 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
         )}
         {checkout && (
           <Checkout
-            subtotal={finalTotal} cart={cart}
+            pricing={pricing} minimumOrderValue={additionalSettings.minimumOrderValue} cart={cart}
             onClose={() => setCheckout(false)}
             onDone={(_order) => { setCheckout(false); setOrdered(true); setCart([]); setCoupon(null); }}
             onOrderCreated={handleOrderCreated}
@@ -4917,7 +6612,34 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
 function HomePage(props: ShellChildProps) {
   const { catalog, wishlist, onWishlist, onDetail, onAdd, user, shagunProductId, onSetShagun } = props;
   const [newsletter, setNewsletter] = useState('');
+  const [newsletterName, setNewsletterName] = useState('');
+  const [newsletterMobile, setNewsletterMobile] = useState('');
+  const [newsletterMessage, setNewsletterMessage] = useState('');
   const [newsletterDone, setNewsletterDone] = useState(false);
+  const [newsletterSending, setNewsletterSending] = useState(false);
+  const [newsletterError, setNewsletterError] = useState('');
+  const handleNewsletterSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (newsletterSending) return;
+
+    const company = String(new FormData(event.currentTarget).get('company') ?? '');
+    setNewsletterSending(true);
+    setNewsletterError('');
+    try {
+      await apiSubmitNewsletter({
+        name: newsletterName,
+        email: newsletter,
+        mobile: newsletterMobile,
+        message: newsletterMessage,
+        company,
+      });
+      setNewsletterDone(true);
+    } catch (error) {
+      setNewsletterError(error instanceof Error ? error.message : 'We could not send your request. Please try again.');
+    } finally {
+      setNewsletterSending(false);
+    }
+  };
 
   return (
     <main>
@@ -4925,11 +6647,15 @@ function HomePage(props: ShellChildProps) {
       <TrustStrip />
       <CategoryRail />
       <ShopSection products={catalog} wishlist={wishlist} onWishlist={onWishlist} onDetail={onDetail} onAdd={onAdd} shagunProductId={shagunProductId} onSetShagun={onSetShagun} />
-      <GiftingSection products={catalog} addToCart={onAdd} shagunProductId={shagunProductId} />
+      <GiftingSection products={catalog} shagunProductId={shagunProductId} />
       <Story catalog={catalog} />
       <Newsletter
-        value={newsletter} setValue={setNewsletter} done={newsletterDone}
-        onSubmit={e => { e.preventDefault(); if (newsletter.includes('@')) setNewsletterDone(true); }}
+        value={newsletter} setValue={setNewsletter}
+        name={newsletterName} setName={setNewsletterName}
+        mobile={newsletterMobile} setMobile={setNewsletterMobile}
+        message={newsletterMessage} setMessage={setNewsletterMessage}
+        done={newsletterDone}
+        submitting={newsletterSending} error={newsletterError} onSubmit={handleNewsletterSubmit}
       />
     </main>
   );
@@ -5160,6 +6886,7 @@ function ContactPage() {
 function ProductDetailPage({ onAdd, user }: { onAdd: (p: Product, v?: ProductVariant) => void; user: AuthUser | null }) {
   const { id } = useParams<{ id: string }>();
   const settings = useSiteSettings();
+  const now = useAvailabilityClock();
   const [product, setProduct] = useState<Product | null>(null);
   const [reviews, setReviews] = useState<ProductReview[]>([]);
   const [loading, setLoading] = useState(true);
@@ -5188,7 +6915,7 @@ function ProductDetailPage({ onAdd, user }: { onAdd: (p: Product, v?: ProductVar
   }, [id]);
 
   const handleAdd = () => {
-    if (!product || !selectedVariant) return;
+    if (!product || !selectedVariant || !productAvailability(product, settings, new Date())) return;
     onAdd(product, selectedVariant);
     setAdded(true);
     setTimeout(() => setAdded(false), 2200);
@@ -5227,6 +6954,7 @@ function ProductDetailPage({ onAdd, user }: { onAdd: (p: Product, v?: ProductVar
   const avgRating = reviews.length
     ? (reviews.reduce((s, r) => s + r.rating, 0) / reviews.length).toFixed(1)
     : product.rating.toFixed(1);
+  const available = productAvailability(product, settings, now);
 
   return (
     <div className="mx-auto max-w-7xl px-5 py-10 sm:px-8 sm:py-16">
@@ -5319,9 +7047,10 @@ function ProductDetailPage({ onAdd, user }: { onAdd: (p: Product, v?: ProductVar
             <p className="font-display text-3xl font-bold">{money(selectedVariant?.price ?? lowestPrice(product))}</p>
             <span className="text-sm text-muted-foreground">/ {product.unit}</span>
           </div>
-          <button onClick={handleAdd}
-            className={`mt-4 flex w-full items-center justify-center gap-2 rounded-full py-4 text-sm font-bold transition-all duration-200 ${added ? 'bg-green-600 text-white' : 'bg-primary text-primary-foreground hover:opacity-90'}`}>
-            {added ? <><Check className="size-4" /> Added to box!</> : <><Plus className="size-4" /> Add to box</>}
+          <AvailabilityNotice product={product} now={now} />
+          <button onClick={handleAdd} disabled={!available}
+            className={`mt-4 flex w-full items-center justify-center gap-2 rounded-full py-4 text-sm font-bold transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${added ? 'bg-green-600 text-white' : 'bg-primary text-primary-foreground hover:opacity-90'}`}>
+            {!available ? 'Currently unavailable' : added ? <><Check className="size-4" /> Added to cart!</> : <><Plus className="size-4" /> Add to cart</>}
           </button>
           <button type="button" onClick={() => window.history.back()}
             className="mt-3 text-center text-xs text-muted-foreground hover:text-foreground">
@@ -5564,6 +7293,9 @@ function StoreRouter() {
               <Route path="/contact">
                 <ContactPage />
               </Route>
+              <Route path="/policies/returns-cancellation" component={ReturnsCancellationPage} />
+              <Route path="/policies/privacy" component={PrivacyPolicyPage} />
+              <Route path="/policies/terms" component={TermsConditionsPage} />
               <Route path="/product/:id">
                 {() => <ProductDetailPage onAdd={props.onAdd} user={props.user} />}
               </Route>

@@ -1,6 +1,6 @@
 ---
 name: Database environment
-description: Local and Replit database configuration uses the uppercase DATABASE_URL variable.
+description: Local and   database configuration uses the uppercase DATABASE_URL variable.
 ---
 
 The application loads `.env` automatically with dotenv, and the required variable name is uppercase `DATABASE_URL`.

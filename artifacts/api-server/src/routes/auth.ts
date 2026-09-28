@@ -1,12 +1,18 @@
 import { Router } from "express";
 import { db, adminSettingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { clearSession, createSession } from "../lib/session.js";
+import { clearSession, createSession, requireSession } from "../lib/session.js";
 
 const ADMIN_EMAIL   = "admin@aggarwalsweets.in";
 const DEFAULT_ADMIN_PASSWORD = "Admin@123";
 
 const router = Router();
+
+router.get("/auth/admin/session", (req, res) => {
+  const session = requireSession(req, res, "admin");
+  if (!session) return;
+  res.json({ email: session.email, role: session.role });
+});
 
 // Server-side admin credential check — never exposes the stored password
 router.post("/auth/admin", async (req, res) => {

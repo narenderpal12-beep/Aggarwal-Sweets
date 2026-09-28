@@ -1,5 +1,8 @@
 import nodemailer from "nodemailer";
-import dotenv from "dotenv";
+import { db, adminSettingsTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
+import { generateOrderBillPdf, type BillItem, type BillOrder } from "./order-bill.js";
+
 const GMAIL_USER = (process.env.GMAIL_USER ?? "").trim();
 const GMAIL_PASS = (process.env.GMAIL_APP_PASSWORD ?? "").replace(/\s/g, "");
 const ADMIN_EMAIL = GMAIL_USER; // same inbox receives all admin notifications
@@ -9,13 +12,7 @@ export const isEmailConfigured = () => Boolean(GMAIL_USER && GMAIL_PASS);
 
 const transporter = nodemailer.createTransport({
   service: "gmail",
-  host: "smtp.gmail.com",
-  port: 465,
-  secure: true,
   auth: { user: GMAIL_USER, pass: GMAIL_PASS },
-  tls: {
-    rejectUnauthorized: false,
-  },
 });
 
 // ─── OTP ──────────────────────────────────────────────────────────────────────
@@ -40,23 +37,75 @@ export async function sendOtpEmail(to: string, code: string): Promise<void> {
 }
 
 // ─── Order emails ─────────────────────────────────────────────────────────────
-interface OrderItem { product: { name: string }; variant: { weight: string; material: string }; quantity: number }
-interface Order {
-  id: string; date: string; phone: string; address: string;
-  subtotal: number; status: string; customerEmail?: string;
-  items: OrderItem[];
+type Order = Omit<BillOrder, "pricing"> & {
+  status: string;
+  receiverName?: string;
+  deliveryRemarks?: string;
+  deliveryContact?: string;
+};
+
+function escapeHtml(value: unknown) {
+  return String(value ?? "").replace(/[&<>"']/g, character => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;",
+  })[character]!);
 }
 
-function itemRows(items: OrderItem[]) {
+export async function sendNewsletterContactEmail(contact: {
+  name: string;
+  email: string;
+  mobile: string;
+  message: string;
+}): Promise<void> {
+  if (!isEmailConfigured()) {
+    throw new Error("Email notifications are not configured");
+  }
+
+  await transporter.sendMail({
+    from: `"Aggarwal Sweets Sirsa" <${GMAIL_USER}>`,
+    to: ADMIN_EMAIL,
+    replyTo: contact.email,
+    subject: "New website message — Aggarwal Sweets Sirsa",
+    text: [
+      "Someone wants to connect with you through the website.",
+      "",
+      `Name: ${contact.name}`,
+      `Mobile: ${contact.mobile}`,
+      `Email address: ${contact.email}`,
+      "",
+      "Message:",
+      contact.message,
+    ].join("\n"),
+    html: `
+      <div style="font-family:sans-serif;max-width:520px;margin:auto;padding:32px;background:#fdf8f0;border-radius:16px">
+        <h2 style="font-size:22px;color:#1a1a1a;margin:0 0 12px">Someone wants to connect with you</h2>
+        <p style="color:#555;margin:0 0 20px">A visitor sent a message through the “A sweet note from us” section.</p>
+        <div style="padding:16px;background:#fff;border-radius:10px;border:1px solid #e8d5b0;color:#333">
+          <p style="margin:0 0 8px"><b>Name:</b> ${escapeHtml(contact.name)}</p>
+          <p style="margin:0 0 8px"><b>Mobile:</b> ${escapeHtml(contact.mobile)}</p>
+          <p style="margin:0 0 16px"><b>Email address:</b> ${escapeHtml(contact.email)}</p>
+          <p style="margin:0 0 6px"><b>Message:</b></p>
+          <p style="margin:0;white-space:pre-wrap">${escapeHtml(contact.message)}</p>
+        </div>
+      </div>
+    `,
+  });
+}
+
+function itemRows(items: BillItem[]) {
+  if (!Array.isArray(items)) return "";
   return items.map(l =>
     `<tr>
-      <td style="padding:8px 0;border-bottom:1px solid #f0e8d8">${l.product.name} (${l.variant.weight})</td>
-      <td style="padding:8px 0;border-bottom:1px solid #f0e8d8;text-align:right">× ${l.quantity}</td>
+      <td style="padding:8px 0;border-bottom:1px solid #f0e8d8">${escapeHtml(l.product?.name ?? "Order item")} (${escapeHtml(l.variant?.weight ?? "Standard")})</td>
+      <td style="padding:8px 0;border-bottom:1px solid #f0e8d8;text-align:right">× ${escapeHtml(l.quantity)}</td>
     </tr>`
   ).join("");
 }
 
-export async function sendOrderEmails(order: Order): Promise<void> {
+export async function sendOrderEmails(order: Order & Pick<BillOrder, "pricing">): Promise<void> {
   if (!isEmailConfigured()) return;
 
   const ops: Promise<void>[] = [];
@@ -64,10 +113,22 @@ export async function sendOrderEmails(order: Order): Promise<void> {
   // 1. Customer confirmation (if email available)
   if (order.customerEmail) {
     ops.push(
-      transporter.sendMail({
+      (async () => {
+        const [logoSetting] = await db
+          .select({ value: adminSettingsTable.value })
+          .from(adminSettingsTable)
+          .where(eq(adminSettingsTable.key, "logo_url"))
+          .limit(1);
+        const billPdf = await generateOrderBillPdf(order, logoSetting?.value);
+        await transporter.sendMail({
         from: `"Aggarwal Sweets Sirsa" <${GMAIL_USER}>`,
         to: order.customerEmail,
         subject: `Order ${order.id} confirmed — Aggarwal Sweets Sirsa`,
+        attachments: [{
+          filename: `Aggarwal-Sweets-Bill-${order.id}.pdf`,
+          content: billPdf,
+          contentType: "application/pdf",
+        }],
         html: `
           <div style="font-family:sans-serif;max-width:520px;margin:auto;padding:32px;background:#fdf8f0;border-radius:16px">
             <h2 style="font-size:22px;color:#1a1a1a;margin:0 0 4px">We've got your order! 🎉</h2>
@@ -79,20 +140,22 @@ export async function sendOrderEmails(order: Order): Promise<void> {
             </table>
 
             <div style="margin:20px 0;padding:16px;background:#fff;border-radius:10px;border:1px solid #e8d5b0;font-size:14px">
-              <div style="display:flex;justify-content:space-between;margin-bottom:8px"><span>Order ID</span><b style="font-family:monospace">${order.id}</b></div>
-              <div style="display:flex;justify-content:space-between;margin-bottom:8px"><span>Total</span><b>₹${order.subtotal}</b></div>
-              <div style="display:flex;justify-content:space-between;margin-bottom:8px"><span>Phone</span><b>${order.phone}</b></div>
-              <div style="display:flex;justify-content:space-between"><span>Delivery to</span><b>${order.address}</b></div>
+               <div style="display:flex;justify-content:space-between;margin-bottom:8px"><span>Order ID</span><b style="font-family:monospace">${escapeHtml(order.id)}</b></div>
+               <div style="display:flex;justify-content:space-between;margin-bottom:8px"><span>Total</span><b>₹${escapeHtml(order.subtotal)}</b></div>
+               <div style="display:flex;justify-content:space-between;margin-bottom:8px"><span>Phone</span><b>${escapeHtml(order.phone)}</b></div>
+               <div style="display:flex;justify-content:space-between"><span>Delivery to</span><b>${escapeHtml(order.address)}</b></div>
             </div>
 
-            <p style="color:#777;font-size:13px;margin:0 0 4px">Payment: <b>Cash on delivery</b> — no advance required.</p>
+            <p style="color:#777;font-size:13px;margin:0 0 4px">Your itemized order bill is attached as a PDF.</p>
+            <p style="color:#777;font-size:13px;margin:0 0 4px">Payment: <b>${order.paymentMethod === "razorpay" ? "Paid online via Razorpay" : "Cash on delivery"}</b>${order.paymentReference ? ` · Reference ${escapeHtml(order.paymentReference)}` : order.paymentMethod === "razorpay" ? "" : " — no advance required"}.</p>
             <p style="color:#777;font-size:13px;margin:0">Fresh batches packed daily in Sirsa.</p>
 
             <hr style="border:none;border-top:1px solid #e8d5b0;margin:24px 0">
             <p style="color:#aaa;font-size:11px;text-align:center">Aggarwal Sweets · Sirsa, Haryana</p>
           </div>
         `,
-      }).then(() => {})
+        });
+      })()
     );
   }
 
@@ -101,11 +164,11 @@ export async function sendOrderEmails(order: Order): Promise<void> {
     transporter.sendMail({
       from: `"Aggarwal Sweets Orders" <${GMAIL_USER}>`,
       to: ADMIN_EMAIL,
-      subject: `🛒 New Order ${order.id} — ₹${order.subtotal}`,
+       subject: `🛒 New Order ${order.id} — ₹${order.subtotal}`,
       html: `
         <div style="font-family:sans-serif;max-width:520px;margin:auto;padding:32px;background:#f9f9f9;border-radius:16px">
           <h2 style="color:#1a1a1a;margin:0 0 4px">New order received</h2>
-          <p style="color:#555;margin:0 0 20px">A new COD order has been placed on the store.</p>
+          <p style="color:#555;margin:0 0 20px">A new ${order.paymentMethod === "razorpay" ? "prepaid Razorpay" : "COD"} order has been placed on the store.</p>
 
           <table style="width:100%;border-collapse:collapse;font-size:14px;color:#333">
             <tr><td style="padding:8px 0;border-bottom:1px solid #e0e0e0;font-weight:bold;color:#2d6a4f" colspan="2">Order Items</td></tr>
@@ -113,17 +176,58 @@ export async function sendOrderEmails(order: Order): Promise<void> {
           </table>
 
           <div style="margin:20px 0;padding:16px;background:#fff;border-radius:10px;border:1px solid #e0e0e0;font-size:14px">
-            <div style="margin-bottom:8px"><b>Order ID:</b> <span style="font-family:monospace">${order.id}</span></div>
-            <div style="margin-bottom:8px"><b>Total:</b> ₹${order.subtotal}</div>
-            <div style="margin-bottom:8px"><b>Phone:</b> ${order.phone}</div>
-            <div style="margin-bottom:8px"><b>Address:</b> ${order.address}</div>
-            <div style="margin-bottom:8px"><b>Customer email:</b> ${order.customerEmail ?? "—"}</div>
-            <div><b>Date:</b> ${order.date}</div>
+             <div style="margin-bottom:8px"><b>Order ID:</b> <span style="font-family:monospace">${escapeHtml(order.id)}</span></div>
+             <div style="margin-bottom:8px"><b>Total:</b> ₹${escapeHtml(order.subtotal)}</div>
+             <div style="margin-bottom:8px"><b>Phone:</b> ${escapeHtml(order.phone)}</div>
+             <div style="margin-bottom:8px"><b>Address:</b> ${escapeHtml(order.address)}</div>
+             <div style="margin-bottom:8px"><b>Customer email:</b> ${escapeHtml(order.customerEmail ?? "—")}</div>
+             <div><b>Date:</b> ${escapeHtml(order.date)}</div>
           </div>
         </div>
       `,
     }).then(() => {})
   );
 
-  await Promise.allSettled(ops);
+  const results = await Promise.allSettled(ops);
+  const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+  if (failures.length) {
+    throw new AggregateError(failures.map(result => result.reason), `${failures.length} order email(s) failed`);
+  }
+}
+
+export async function sendDeliveredOrderEmail(order: Order): Promise<void> {
+  if (!isEmailConfigured() || !order.customerEmail) return;
+
+  await transporter.sendMail({
+    from: `"Aggarwal Sweets Sirsa" <${GMAIL_USER}>`,
+    to: order.customerEmail,
+    subject: `Order ${order.id} delivered — Aggarwal Sweets Sirsa`,
+    html: `
+      <div style="font-family:sans-serif;max-width:520px;margin:auto;padding:32px;background:#fdf8f0;border-radius:16px">
+        <h2 style="font-size:22px;color:#1a1a1a;margin:0 0 4px">Your order has been delivered</h2>
+        <p style="color:#555;margin:0 0 24px">Thank you for ordering from Aggarwal Sweets Sirsa. We hope your sweets arrived fresh and delicious.</p>
+
+        <table style="width:100%;border-collapse:collapse;font-size:14px;color:#333">
+          <tr><td style="padding:8px 0;border-bottom:1px solid #f0e8d8;font-weight:bold;color:#2d6a4f" colspan="2">Delivered order</td></tr>
+          ${itemRows(order.items)}
+        </table>
+
+        <div style="margin:20px 0;padding:16px;background:#fff;border-radius:10px;border:1px solid #e8d5b0;font-size:14px">
+          <div style="display:flex;justify-content:space-between;margin-bottom:8px"><span>Order ID</span><b style="font-family:monospace">${escapeHtml(order.id)}</b></div>
+          <div style="display:flex;justify-content:space-between;margin-bottom:8px"><span>Total</span><b>₹${escapeHtml(order.subtotal)}</b></div>
+          <div style="display:flex;justify-content:space-between;margin-bottom:8px"><span>Delivered to</span><b>${escapeHtml(order.receiverName ?? "—")}</b></div>
+          <div style="display:flex;justify-content:space-between;margin-bottom:8px"><span>Receiver contact</span><b>${escapeHtml(order.deliveryContact ?? "—")}</b></div>
+          <div style="display:flex;justify-content:space-between"><span>Delivery address</span><b>${escapeHtml(order.address)}</b></div>
+        </div>
+
+        <div style="margin:20px 0;padding:16px;background:#fff;border-radius:10px;border:1px solid #e8d5b0;font-size:14px">
+          <b>Delivery remarks</b>
+          <p style="margin:8px 0 0;color:#555">${escapeHtml(order.deliveryRemarks ?? "No remarks added.")}</p>
+        </div>
+
+        <hr style="border:none;border-top:1px solid #e8d5b0;margin:24px 0">
+        <p style="color:#aaa;font-size:11px;text-align:center">Aggarwal Sweets · Sirsa, Haryana</p>
+      </div>
+    `,
+  });
 }
