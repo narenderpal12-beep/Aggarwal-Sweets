@@ -73,7 +73,7 @@ export type OrderReportPdfData = {
 
 const money = (value: number) => `INR ${value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export async function generateOrderBillPdf(order: BillOrder, logoDataUrl?: string): Promise<Buffer> {
+export async function generateThermalOrderBillPdf(order: BillOrder, logoDataUrl?: string): Promise<Buffer> {
   const date = new Date(order.date);
   const amounts = [
     order.subtotal, order.pricing.itemsSubtotal, order.pricing.discount,

@@ -1,7 +1,8 @@
 import nodemailer from "nodemailer";
 import { db, adminSettingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { generateOrderBillPdf, type BillItem, type BillOrder } from "./order-bill.js";
+import { generateA4OrderBillPdf } from "./order-bill-a4.js";
+import type { BillItem, BillOrder } from "./order-bill.js";
 
 const GMAIL_USER = (process.env.GMAIL_USER ?? "").trim();
 const GMAIL_PASS = (process.env.GMAIL_APP_PASSWORD ?? "").replace(/\s/g, "");
@@ -119,7 +120,7 @@ export async function sendOrderEmails(order: Order & Pick<BillOrder, "pricing">)
           .from(adminSettingsTable)
           .where(eq(adminSettingsTable.key, "logo_url"))
           .limit(1);
-        const billPdf = await generateOrderBillPdf(order, logoSetting?.value);
+        const billPdf = await generateA4OrderBillPdf(order, logoSetting?.value);
         await transporter.sendMail({
         from: `"Aggarwal Sweets Sirsa" <${GMAIL_USER}>`,
         to: order.customerEmail,
