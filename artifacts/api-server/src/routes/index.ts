@@ -12,6 +12,7 @@ import otpRouter       from "./otp";
 import paymentsRouter  from "./payments";
 import reportsRouter   from "./reports";
 import newsletterRouter from "./newsletter";
+import deliveryAreasRouter from "./delivery-areas";
 
 const router: IRouter = Router();
 
@@ -28,5 +29,6 @@ router.use(otpRouter);
 router.use(paymentsRouter);
 router.use(reportsRouter);
 router.use(newsletterRouter);
+router.use(deliveryAreasRouter);
 
 export default router;

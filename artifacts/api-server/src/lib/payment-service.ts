@@ -3,13 +3,14 @@ import { and, desc, eq, notInArray, sql } from "drizzle-orm";
 import { sendOrderEmails } from "./email.js";
 import type { BillItem, BillPricing } from "./order-bill.js";
 import { captureGatewayPayment, type GatewayPayment } from "./razorpay.js";
+import { formatDeliveryAddress } from "./delivery-address.js";
 
 function sendConfirmation(order: DbOrder, paymentReference: string) {
   sendOrderEmails({
     id: order.id,
     date: order.date,
     phone: order.phone,
-    address: order.address,
+    address: formatDeliveryAddress(order.address, order.deliveryAreaName),
     subtotal: order.subtotal,
     items: order.items as BillItem[],
     pricing: order.pricing as BillPricing,

@@ -12,7 +12,7 @@ import {
   Package, ListOrdered, Settings, Home, ChevronRight as Chevron, Lock, RotateCcw, FlaskConical,
   LogOut, Eye, EyeOff, Pencil, RefreshCw, Users, Loader2,
   Tag, Percent, Upload, Palette, FileText, ImageIcon, Type, LayoutList, Facebook,
-  Bell, BellRing, Volume2, VolumeX, Download, CalendarDays, BarChart3, FileSpreadsheet,
+  Bell, BellRing, Play, Volume2, VolumeX, Download, CalendarDays, BarChart3, FileSpreadsheet,
   TrendingUp, Filter, CircleDot
 } from 'lucide-react';
 import NotFound from '@/pages/not-found';
@@ -33,6 +33,7 @@ type Product = {
 type AvailabilityWindow = { day: number; start: string; end: string };
 type CouponCode = { code: string; type: 'percent' | 'amount'; value: number; minOrder: number; active: boolean; description: string };
 type AppliedCoupon = { code: string; discount: number };
+type DeliveryArea = { id: string; name: string; active: boolean; sortOrder?: number };
 type CartLine = { product: Product; variant: ProductVariant; quantity: number };
 type AuthUser = { email: string; name?: string; role?: 'customer' | 'admin' };
 type CustomerRecord = {
@@ -57,6 +58,7 @@ type OrderRecord = {
   id: string; date: string; items: CartLine[]; subtotal: number;
   pricing?: OrderPricing;
   status: OrderStatus; address: string; phone: string;
+  deliveryAreaId?: string; deliveryAreaName?: string;
   paymentMethod?: PaymentMethod; paymentStatus?: PaymentState;
   customerEmail?: string; customerName?: string;
   receiverName?: string; deliveryRemarks?: string; deliveryContact?: string;
@@ -404,6 +406,8 @@ function normalizeOrder(value: unknown): OrderRecord | null {
     paymentStatus: ['pending', 'paid', 'failed', 'refunded'].includes(order.paymentStatus as string)
       ? order.paymentStatus as PaymentState : 'pending',
     address: typeof order.address === 'string' ? order.address : '',
+    deliveryAreaId: typeof order.deliveryAreaId === 'string' ? order.deliveryAreaId : undefined,
+    deliveryAreaName: typeof order.deliveryAreaName === 'string' ? order.deliveryAreaName : undefined,
     phone: typeof order.phone === 'string' ? order.phone : '',
     customerEmail: typeof order.customerEmail === 'string' ? order.customerEmail : undefined,
     customerName: typeof order.customerName === 'string' ? order.customerName : undefined,
@@ -442,6 +446,30 @@ function readWishlist(): string[] {
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
 const API = '/api';
+
+function formatDeliveryAddress(address?: string | null, deliveryAreaName?: string | null) {
+  const freeTextAddress = address?.trim() ?? '';
+  const areaName = deliveryAreaName?.trim() ?? '';
+  if (!areaName) return freeTextAddress;
+  if (!freeTextAddress) return areaName;
+  const addressLower = freeTextAddress.toLocaleLowerCase();
+  const areaLower = areaName.toLocaleLowerCase();
+  if (addressLower === areaLower || addressLower.endsWith(`, ${areaLower}`)) return freeTextAddress;
+  return `${freeTextAddress}, ${areaName}`;
+}
+
+async function apiFetchDeliveryAreas(): Promise<DeliveryArea[]> {
+  const response = await fetch(`${API}/delivery-areas`, { cache: 'no-store' });
+  const data = await response.json().catch(() => null);
+  if (!response.ok || !Array.isArray(data)) {
+    throw new Error(typeof data?.error === 'string' ? data.error : 'Delivery Areas could not be loaded.');
+  }
+  return data.filter((area: unknown): area is DeliveryArea =>
+    Boolean(area && typeof area === 'object' &&
+      typeof (area as DeliveryArea).id === 'string' &&
+      typeof (area as DeliveryArea).name === 'string' &&
+      (area as DeliveryArea).active === true));
+}
 
 async function apiFetchCatalog(): Promise<Product[]> {
   try {
@@ -554,6 +582,62 @@ async function fetchAdminReportPdf(report: AdminTableReport): Promise<Blob> {
     throw new Error('The server returned an invalid PDF. Please try again.');
   }
   return blob;
+}
+
+function canPrintOrderBill(order: OrderRecord): boolean {
+  if (!order.pricing || !order.address?.trim() || !Array.isArray(order.items) || order.items.length === 0) return false;
+  if (!(['Confirmed', 'Packing', 'Out for delivery', 'Delivered'] as OrderStatus[]).includes(order.status)) return false;
+  const paymentStatus = order.paymentStatus ?? 'pending';
+  if (order.paymentMethod === 'razorpay') return paymentStatus === 'paid' || paymentStatus === 'refunded';
+  return order.paymentMethod === 'cod' && ['pending', 'paid', 'refunded'].includes(paymentStatus);
+}
+
+function OrderBillDownloadButton({ order }: { order: OrderRecord }) {
+  const [downloading, setDownloading] = useState(false);
+  const [error, setError] = useState('');
+  if (!canPrintOrderBill(order)) return null;
+
+  const downloadBill = async () => {
+    setDownloading(true);
+    setError('');
+    try {
+      const response = await fetch(`${API}/orders/${encodeURIComponent(order.id)}/bill.pdf`, {
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(typeof result.error === 'string' ? result.error : 'The bill could not be downloaded.');
+      }
+      const blob = await response.blob();
+      if (!blob.size || (blob.type && !blob.type.includes('application/pdf'))) {
+        throw new Error('The server returned an invalid PDF. Please try again.');
+      }
+      const safeId = order.id.replace(/[^a-z0-9_-]/gi, '-');
+      downloadReportFile(blob, `Aggarwal-Sweets-Bill-${safeId}.pdf`);
+    } catch (downloadError) {
+      setError(downloadError instanceof Error ? downloadError.message : 'The bill could not be downloaded.');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <div className="mt-4">
+      <button
+        type="button"
+        onClick={downloadBill}
+        disabled={downloading}
+        aria-busy={downloading}
+        className="inline-flex items-center gap-2 rounded-xl border border-secondary/30 bg-background px-4 py-2 text-xs font-bold text-secondary transition-colors hover:bg-secondary/5 disabled:cursor-wait disabled:opacity-60"
+        data-testid={`button-print-order-bill-${order.id}`}
+      >
+        <Download className="size-3.5" />
+        {downloading ? 'Preparing PDF…' : 'Print Bill'}
+      </button>
+      {error && <p className="mt-2 text-xs text-red-600" role="alert">{error}</p>}
+    </div>
+  );
 }
 
 async function apiStartOrderCheckout(id: string): Promise<{ order: OrderRecord; checkout?: RazorpayCheckout; alreadyPaid?: boolean }> {
@@ -729,7 +813,7 @@ async function apiCheckAdminSession(): Promise<'valid' | 'invalid' | 'unavailabl
 }
 
 const ADMIN_EMAIL = 'admin@aggarwalsweets.in';
-type AdminSection = 'dashboard' | 'products' | 'orders' | 'payments' | 'other-records' | 'customers' | 'categories' | 'settings' | 'additional' | 'blog' | 'coupons' | 'reviews';
+type AdminSection = 'dashboard' | 'products' | 'orders' | 'payments' | 'other-records' | 'customers' | 'categories' | 'delivery-areas' | 'settings' | 'additional' | 'blog' | 'coupons' | 'reviews';
 type MasterCategory = { id: string; label: string; note: string; image: string; inMenu: boolean; inCraving: boolean; active?: boolean; schedule?: AvailabilityWindow[] | null };
 
 const ADMIN_SETTINGS_VISIBILITY_OPTIONS = [
@@ -2403,9 +2487,22 @@ function ProductDrawer({ product, onClose, onAdd }: { product: Product; onClose:
 }
 
 // ─── Cart Drawer ──────────────────────────────────────────────────────────────
-function CartDrawer({ cart, subtotal, updateQty, onClose, onCheckout, user, onAuthOpen, coupon, onApplyCoupon, onRemoveCoupon }: {
+function CartDeliveryInfo() {
+  return (
+    <section className="rounded-xl border border-accent/40 bg-accent/10 px-3 py-2.5 text-left shadow-sm" aria-label="Delivery information">
+      <p className="mb-1 text-[10px] font-bold uppercase tracking-wide text-primary">Delivery information</p>
+      <ul className="space-y-1 text-[11px] font-medium text-foreground">
+        <li className="flex items-center gap-2"><Clock3 className="size-3 shrink-0 text-secondary" /> Minimum delivery time: 1 hour</li>
+        <li className="flex items-center gap-2"><Clock3 className="size-3 shrink-0 text-secondary" /> Delivery timing: 10 AM to 8 PM</li>
+        <li className="flex items-center gap-2"><MapPin className="size-3 shrink-0 text-secondary" /> Delivery area: up to 5 km</li>
+      </ul>
+    </section>
+  );
+}
+
+function CartDrawer({ cart, subtotal, updateQty, onClose, onBrowseProducts, onCheckout, user, onAuthOpen, coupon, onApplyCoupon, onRemoveCoupon }: {
   cart: CartLine[]; subtotal: number; updateQty: (i: number, delta: number) => void;
-  onClose: () => void; onCheckout: () => void; user: AuthUser | null; onAuthOpen: () => void;
+  onClose: () => void; onBrowseProducts: () => void; onCheckout: () => void; user: AuthUser | null; onAuthOpen: () => void;
   coupon: AppliedCoupon | null; onApplyCoupon: (code: string) => Promise<string | null>; onRemoveCoupon: () => void;
 }) {
   const [couponInput, setCouponInput] = useState('');
@@ -2427,31 +2524,40 @@ function CartDrawer({ cart, subtotal, updateQty, onClose, onCheckout, user, onAu
   };
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-primary/40 backdrop-blur-sm" onMouseDown={onClose}>
-      <div className="flex h-full w-full max-w-md flex-col bg-background shadow-2xl" onMouseDown={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between border-b border-border px-5 py-4">
+      <div className="relative flex h-full w-full max-w-md flex-col bg-background shadow-2xl" onMouseDown={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <div>
-            <p className="font-display text-2xl">Your sweet box</p>
-            <p className="text-xs text-muted-foreground">{cart.reduce((s, l) => s + l.quantity, 0)} items · packed with care</p>
+            <p className="font-display text-xl">Your sweet box</p>
+            <p className="text-[11px] text-muted-foreground">{cart.reduce((s, l) => s + l.quantity, 0)} items · packed with care</p>
           </div>
-          <button onClick={onClose} className="grid size-9 place-items-center rounded-full hover:bg-muted" aria-label="Close cart" data-testid="button-close-cart"><X className="size-5" /></button>
+          <button onClick={onClose} className="grid size-8 place-items-center rounded-full hover:bg-muted" aria-label="Close cart" data-testid="button-close-cart"><X className="size-4" /></button>
         </div>
-        {cart.length === 0 ? (
-          <div className="flex flex-1 flex-col items-center justify-center px-8 text-center">
-            <div className="grid size-20 place-items-center rounded-full bg-muted text-secondary"><ShoppingBag className="size-8" /></div>
-            <h3 className="mt-5 font-display text-2xl">Your box is waiting</h3>
-            <p className="mt-2 text-sm text-muted-foreground">Add something lovely from the counter.</p>
-            <button onClick={onClose} className="mt-6 rounded-full bg-primary px-5 py-3 text-xs font-bold text-primary-foreground" data-testid="button-continue-shopping">Continue shopping</button>
-          </div>
-        ) : (
-          <>
-            <div className="flex-1 space-y-4 overflow-auto p-5">
-              {cart.map((line, i) => (
+        <div className="shrink-0 space-y-2 border-b border-border bg-background px-4 py-2">
+          <button
+            onClick={onBrowseProducts}
+            className="flex w-full items-center justify-center gap-2 rounded-full bg-primary px-4 py-2 text-xs font-bold text-primary-foreground shadow-sm transition-opacity hover:opacity-90"
+            data-testid={cart.length === 0 ? "button-continue-shopping" : "button-cart-add-products"}
+          >
+            <Plus className="size-3.5" /> {cart.length === 0 ? "Browse products" : "Add more products"}
+          </button>
+          <CartDeliveryInfo />
+        </div>
+        <div className={`min-h-0 flex-1 overflow-y-auto ${cart.length > 0 ? "pb-32" : ""}`}>
+          <div className={cart.length > 0 ? "mx-4 mt-3 rounded-2xl border border-border bg-card p-4" : "h-full"}>
+          <div className={cart.length === 0 ? "flex min-h-full flex-col justify-center p-6" : "space-y-3"}>
+          {cart.length === 0 ? (
+            <div className="flex flex-col items-center text-center">
+              <div className="grid size-16 place-items-center rounded-full bg-muted text-secondary"><ShoppingBag className="size-7" /></div>
+              <h3 className="mt-4 font-display text-xl">Your box is waiting</h3>
+              <p className="mt-1 text-xs text-muted-foreground">Add something lovely from the counter.</p>
+            </div>
+          ) : cart.map((line, i) => (
                 <div key={`${line.product.id}-${line.variant.material}-${line.variant.weight}`} className="flex gap-3" data-testid={`row-cart-${line.product.id}`}>
-                  <img src={line.product.image} alt="" className="size-20 rounded-xl object-cover" />
+                  <img src={line.product.image} alt="" className="size-16 rounded-xl object-cover" />
                   <div className="min-w-0 flex-1">
                     <div className="flex justify-between gap-2">
                       <div>
-                        <p className="font-display text-lg">{line.product.name}</p>
+                        <p className="font-display text-base">{line.product.name}</p>
                         <p className="text-xs text-muted-foreground">{variantLabel(line.variant)}</p>
                         {line.product.id === 'shagun-box' && (
                           <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-accent/15 px-2 py-0.5 font-mono-ui text-[9px] font-bold uppercase tracking-wider text-accent">
@@ -2461,22 +2567,24 @@ function CartDrawer({ cart, subtotal, updateQty, onClose, onCheckout, user, onAu
                       </div>
                       <p className="font-mono-ui text-xs font-bold whitespace-nowrap">{money(line.variant.price * line.quantity)}</p>
                     </div>
-                    <div className="mt-3 flex items-center gap-3">
+                    <div className="mt-2 flex items-center gap-2">
                       <div className="flex items-center rounded-full border border-border">
-                        <button onClick={() => updateQty(i, -1)} className="grid size-7 place-items-center" aria-label={`Decrease ${line.product.name}`} data-testid={`button-decrease-${line.product.id}`}><Minus className="size-3" /></button>
-                        <span className="w-5 text-center text-xs font-bold">{line.quantity}</span>
-                        <button onClick={() => updateQty(i, 1)} className="grid size-7 place-items-center" aria-label={`Increase ${line.product.name}`} data-testid={`button-increase-${line.product.id}`}><Plus className="size-3" /></button>
+                        <button onClick={() => updateQty(i, -1)} className="grid size-6 place-items-center" aria-label={`Decrease ${line.product.name}`} data-testid={`button-decrease-${line.product.id}`}><Minus className="size-3" /></button>
+                        <span className="w-4 text-center text-[11px] font-bold">{line.quantity}</span>
+                        <button onClick={() => updateQty(i, 1)} className="grid size-6 place-items-center" aria-label={`Increase ${line.product.name}`} data-testid={`button-increase-${line.product.id}`}><Plus className="size-3" /></button>
                       </div>
                       <span className="text-[10px] text-muted-foreground">{money(line.variant.price)} each</span>
                     </div>
                   </div>
                 </div>
               ))}
-            </div>
-            <div className="border-t border-border bg-card p-5">
+          </div>
+        {cart.length > 0 && (
+            <section className="mt-4 space-y-2.5 border-t border-border pt-3" aria-label="Order details">
+              <h3 className="font-display text-base">Order details</h3>
               {/* Coupon code */}
               {coupon ? (
-                <div className="mb-3 flex items-center justify-between rounded-xl border border-green-200 bg-green-50 px-3 py-2.5">
+                <div className="mb-2 flex items-center justify-between rounded-xl border border-green-200 bg-green-50 px-3 py-2">
                   <div className="flex items-center gap-2 text-green-700">
                     <Tag className="size-3.5" />
                     <span className="text-xs font-bold">{coupon.code} applied</span>
@@ -2490,51 +2598,190 @@ function CartDrawer({ cart, subtotal, updateQty, onClose, onCheckout, user, onAu
                     <input
                       value={couponInput} onChange={e => { setCouponInput(e.target.value.toUpperCase()); setCouponError(''); }}
                       onKeyDown={e => e.key === 'Enter' && handleApplyCoupon()}
-                      placeholder="Coupon code" className="flex-1 rounded-xl border border-input px-3 py-2 text-xs font-mono-ui uppercase outline-none focus:ring-2 focus:ring-ring"
+                      placeholder="Coupon code" className="min-w-0 flex-1 rounded-xl border border-input px-3 py-1.5 text-xs font-mono-ui uppercase outline-none focus:ring-2 focus:ring-ring"
                       data-testid="input-coupon" />
                     <button onClick={handleApplyCoupon} disabled={couponLoading || !couponInput.trim()}
-                      className="rounded-xl bg-primary px-3 py-2 text-xs font-bold text-primary-foreground disabled:opacity-40">
+                      className="rounded-xl bg-primary px-3 py-1.5 text-[11px] font-bold text-primary-foreground disabled:opacity-40">
                       {couponLoading ? '…' : 'Apply'}
                     </button>
                   </div>
                   {couponError && <p className="mt-1 text-[11px] text-red-500">{couponError}</p>}
                 </div>
               )}
-              <div className="flex justify-between text-sm"><span>Subtotal</span><span className={`font-mono-ui font-bold ${coupon ? 'line-through text-muted-foreground text-xs' : ''}`}>{money(subtotal)}</span></div>
-              {coupon && <div className="flex justify-between text-sm text-green-700"><span>Discount ({coupon.code})</span><span>−{money(pricing.discount)}</span></div>}
-              {pricing.gst > 0 && <div className="flex justify-between text-sm"><span>GST ({pricing.gstPercent}%)</span><span>{money(pricing.gst)}</span></div>}
-              {charges.deliveryEnabled && <div className="flex justify-between text-sm"><span>{pricing.deliveryWaived ? 'Delivery charge · waived' : 'Delivery charge'}</span><span>{money(pricing.deliveryCharge)}</span></div>}
-              {charges.handlingEnabled && <div className="flex justify-between text-sm"><span>Handling charge</span><span>{money(pricing.handlingCharge)}</span></div>}
-              <div className="mt-2 flex justify-between border-t border-border pt-2 text-sm font-bold"><span>Order total</span><span className="font-mono-ui">{money(pricing.total)}</span></div>
+              <div className="flex justify-between text-xs"><span>Subtotal</span><span className={`font-mono-ui font-bold ${coupon ? 'line-through text-muted-foreground' : ''}`}>{money(subtotal)}</span></div>
+              {coupon && <div className="flex justify-between text-xs text-green-700"><span>Discount ({coupon.code})</span><span>−{money(pricing.discount)}</span></div>}
+              {pricing.gst > 0 && <div className="flex justify-between text-xs"><span>GST ({pricing.gstPercent}%)</span><span>{money(pricing.gst)}</span></div>}
+              {charges.deliveryEnabled && <div className="flex justify-between text-xs"><span>{pricing.deliveryWaived ? 'Delivery charge · waived' : 'Delivery charge'}</span><span>{money(pricing.deliveryCharge)}</span></div>}
+              {charges.handlingEnabled && <div className="flex justify-between text-xs"><span>Handling charge</span><span>{money(pricing.handlingCharge)}</span></div>}
               {charges.minimumOrderValue > 0 && (
-                <p className={`mt-2 text-xs ${minimumMet ? 'text-muted-foreground' : 'font-semibold text-amber-800'}`}>
+                <p className={`mt-1.5 text-[11px] ${minimumMet ? 'text-muted-foreground' : 'font-semibold text-amber-800'}`}>
                   {minimumMet ? `Minimum order: ${money(charges.minimumOrderValue)} · met` : `Add ${money(charges.minimumOrderValue - subtotal)} more to meet the ${money(charges.minimumOrderValue)} minimum order.`}
                 </p>
               )}
               {unavailableLines.length > 0 && (
-                <p className="mt-3 rounded-xl bg-amber-50 p-3 text-xs text-amber-900">
+                <p className="mt-2 rounded-xl bg-amber-50 p-2.5 text-[11px] text-amber-900">
                   {unavailableLines.map(line => line.product.name).join(', ')} currently unavailable. Remove these items or return during their available hours to check out.
                 </p>
               )}
-              {user ? (
-                <button onClick={onCheckout} disabled={unavailableLines.length > 0 || !minimumMet} className="mt-5 flex w-full items-center justify-center gap-2 rounded-full bg-secondary py-4 text-sm font-bold text-secondary-foreground disabled:cursor-not-allowed disabled:opacity-40" data-testid="button-proceed-checkout">
-                  Proceed to checkout <ArrowRight className="size-4" />
-                </button>
-              ) : (
-                <div className="mt-5 space-y-3">
-                  <div className="flex items-center gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                    <Lock className="size-4 shrink-0" />
-                    <span>Sign in to place your order securely.</span>
-                  </div>
-                  <button onClick={() => { onClose(); onAuthOpen(); }} disabled={!minimumMet || unavailableLines.length > 0} className="flex w-full items-center justify-center gap-2 rounded-full bg-primary py-4 text-sm font-bold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-40" data-testid="button-cart-signin">
-                    <UserRound className="size-4" /> Sign in to checkout
-                  </button>
-                </div>
-              )}
-            </div>
-          </>
+            </section>
         )}
+        </div>
       </div>
+      {cart.length > 0 && (
+        <div className="absolute bottom-0 left-0 z-10 box-border w-full max-w-full overflow-x-hidden border-t border-border bg-background px-4 py-3">
+          <div className="flex flex-col gap-2">
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold text-muted-foreground">Total amount</p>
+              <p className="font-mono-ui text-base font-bold">{money(pricing.total)}</p>
+            </div>
+            {user ? (
+              <button
+                onClick={onCheckout}
+                disabled={unavailableLines.length > 0 || !minimumMet}
+                className="flex w-full items-center justify-center gap-2 rounded-full bg-secondary px-4 py-2.5 text-xs font-bold text-secondary-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                data-testid="button-proceed-checkout"
+              >
+                Proceed to checkout <ArrowRight className="size-3.5" />
+              </button>
+            ) : (
+              <button
+                onClick={() => { onClose(); onAuthOpen(); }}
+                disabled={!minimumMet || unavailableLines.length > 0}
+                className="flex w-full items-center justify-center gap-2 rounded-full bg-primary px-4 py-2.5 text-xs font-bold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                data-testid="button-cart-signin"
+              >
+                <UserRound className="size-3.5" /> Sign in to checkout
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+    </div>
+  );
+}
+
+function DeliveryAreaPicker({ id, areas, value, onChange, disabled = false, required = false, placeholder = 'Search serviceable areas…' }: {
+  id: string;
+  areas: DeliveryArea[];
+  value: string;
+  onChange: (area: DeliveryArea | null) => void;
+  disabled?: boolean;
+  required?: boolean;
+  placeholder?: string;
+}) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const selectedArea = areas.find(area => area.id === value);
+  const filteredAreas = areas.filter(area => area.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const listboxId = `${id}-options`;
+
+  useEffect(() => {
+    if (!open) setQuery(selectedArea?.name ?? '');
+  }, [open, selectedArea?.id, selectedArea?.name]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointer);
+  }, [open]);
+
+  const chooseArea = (area: DeliveryArea) => {
+    onChange(area);
+    setQuery(area.name);
+    setOpen(false);
+    setActiveIndex(0);
+  };
+
+  return (
+    <div className="relative" ref={containerRef}>
+      <div className="relative">
+        <input
+          id={id}
+          type="text"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={open}
+          aria-controls={listboxId}
+          aria-activedescendant={open && filteredAreas[activeIndex] ? `${listboxId}-${activeIndex}` : undefined}
+          aria-required={required}
+          autoComplete="off"
+          disabled={disabled}
+          value={open ? query : selectedArea?.name ?? query}
+          onFocus={() => {
+            setQuery(selectedArea?.name ?? '');
+            setOpen(true);
+          }}
+          onChange={event => {
+            setQuery(event.target.value);
+            onChange(null);
+            setActiveIndex(0);
+            setOpen(true);
+          }}
+          onKeyDown={event => {
+            if (event.key === 'ArrowDown') {
+              event.preventDefault();
+              setOpen(true);
+              setActiveIndex(index => Math.min(index + 1, Math.max(0, filteredAreas.length - 1)));
+            } else if (event.key === 'ArrowUp') {
+              event.preventDefault();
+              setOpen(true);
+              setActiveIndex(index => Math.max(0, index - 1));
+            } else if (event.key === 'Escape') {
+              setOpen(false);
+            } else if (event.key === 'Enter' && open && filteredAreas.length > 0) {
+              event.preventDefault();
+              chooseArea(filteredAreas[activeIndex] ?? filteredAreas[0]!);
+            }
+          }}
+          placeholder={placeholder}
+          className="w-full rounded-xl border border-input bg-background px-4 py-3 pr-11 text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
+          data-testid={`input-${id}`}
+        />
+        <button
+          type="button"
+          tabIndex={-1}
+          disabled={disabled}
+          aria-label={open ? 'Close Delivery Area choices' : 'Show Delivery Area choices'}
+          onClick={() => {
+            setQuery(selectedArea?.name ?? '');
+            setOpen(current => !current);
+          }}
+          className="absolute inset-y-0 right-0 grid w-11 place-items-center text-muted-foreground disabled:opacity-50"
+        >
+          <ChevronDown className={`size-4 transition-transform ${open ? 'rotate-180' : ''}`} />
+        </button>
+      </div>
+      {open && !disabled && (
+        <div
+          id={listboxId}
+          role="listbox"
+          aria-label="Serviceable Delivery Areas"
+          className="absolute z-50 mt-1 max-h-56 w-full overflow-auto rounded-xl border border-border bg-background p-1 shadow-xl"
+        >
+          {filteredAreas.length ? filteredAreas.map((area, index) => (
+            <div
+              key={area.id}
+              id={`${listboxId}-${index}`}
+              role="option"
+              aria-selected={area.id === value}
+              onMouseDown={event => event.preventDefault()}
+              onMouseEnter={() => setActiveIndex(index)}
+              onClick={() => chooseArea(area)}
+              className={`cursor-pointer rounded-lg px-3 py-2.5 text-sm ${index === activeIndex ? 'bg-muted' : 'hover:bg-muted'}`}
+            >
+              {area.name}
+            </div>
+          )) : (
+            <p className="px-3 py-3 text-sm text-muted-foreground">No matching Delivery Areas.</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -2548,10 +2795,17 @@ function Checkout({ pricing, minimumOrderValue, cart, onClose, onDone, onOrderCr
   const [orderRef, setOrderRef] = useState<OrderRecord | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const [freeTextAddress, setFreeTextAddress] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cod');
   const [codAvailable, setCodAvailable] = useState(true);
   const [razorpayAvailable, setRazorpayAvailable] = useState(false);
   const [availabilityLoading, setAvailabilityLoading] = useState(true);
+  const [deliveryAreas, setDeliveryAreas] = useState<DeliveryArea[]>([]);
+  const [deliveryAreasLoading, setDeliveryAreasLoading] = useState(true);
+  const [deliveryAreasError, setDeliveryAreasError] = useState('');
+  const [deliveryAreaId, setDeliveryAreaId] = useState(() => {
+    try { return localStorage.getItem('aggarwal-saved-delivery-area-id') ?? ''; } catch { return ''; }
+  });
   const [onlineNote, setOnlineNote] = useState('');
   const [paymentUncertain, setPaymentUncertain] = useState(false);
   const [newOrderNotice, setNewOrderNotice] = useState('');
@@ -2562,9 +2816,19 @@ function Checkout({ pricing, minimumOrderValue, cart, onClose, onDone, onOrderCr
         deliveryCharge: 0, deliveryWaived: false, handlingCharge: 0, total: orderRef.subtotal,
       }
     : pricing;
+  const selectedDeliveryAreaName = deliveryAreas.find(area => area.id === deliveryAreaId)?.name;
 
   useEffect(() => {
     let active = true;
+    void apiFetchDeliveryAreas().then(areas => {
+      if (!active) return;
+      setDeliveryAreas(areas);
+      setDeliveryAreaId(current => areas.some(area => area.id === current) ? current : '');
+    }).catch(error => {
+      if (active) setDeliveryAreasError(error instanceof Error ? error.message : 'Delivery Areas could not be loaded.');
+    }).finally(() => {
+      if (active) setDeliveryAreasLoading(false);
+    });
     void fetch(`${API}/payments/availability`).then(r => r.ok ? r.json() : { razorpay: false, cod: true })
       .then(data => {
         if (!active) return;
@@ -2649,6 +2913,15 @@ function Checkout({ pricing, minimumOrderValue, cart, onClose, onDone, onOrderCr
     const customerName = (form.querySelector('#customer-name') as HTMLInputElement)?.value ?? '';
     const address = (form.querySelector('#customer-address') as HTMLTextAreaElement)?.value ?? '';
     const phone = (form.querySelector('#customer-phone') as HTMLInputElement)?.value ?? '';
+    if (!orderRef && !deliveryAreas.some(area => area.id === deliveryAreaId)) {
+      setSubmitError(deliveryAreasError
+        ? 'Delivery Areas could not be loaded. Please try again before placing your order.'
+        : deliveryAreas.length
+          ? 'Please select a Delivery Area before placing your order.'
+          : 'No serviceable Delivery Areas are configured yet. Please contact the store.');
+      setSubmitting(false);
+      return;
+    }
     if (orderRef?.paymentMethod === 'razorpay') {
       try {
         const resumed = await apiStartOrderCheckout(orderRef.id);
@@ -2676,6 +2949,7 @@ function Checkout({ pricing, minimumOrderValue, cart, onClose, onDone, onOrderCr
       pricing,
       status: 'Confirmed',
       address,
+      deliveryAreaId,
       phone,
       customerName,
       customerEmail: user?.role === 'customer' ? user.email : undefined,
@@ -2689,6 +2963,13 @@ function Checkout({ pricing, minimumOrderValue, cart, onClose, onDone, onOrderCr
       return;
     }
     const savedOrder = result.order;
+    const selectedArea = deliveryAreas.find(area => area.id === savedOrder.deliveryAreaId);
+    if (selectedArea) {
+      try {
+        localStorage.setItem('aggarwal-saved-delivery-area-id', selectedArea.id);
+        localStorage.setItem('aggarwal-saved-delivery-area-name', selectedArea.name);
+      } catch { /* address preference is optional; the order is already saved */ }
+    }
     onOrderCreated(savedOrder);
     setOrderRef(savedOrder);
     if (paymentMethod === 'razorpay') {
@@ -2714,6 +2995,7 @@ function Checkout({ pricing, minimumOrderValue, cart, onClose, onDone, onOrderCr
         <p className="mt-3 text-sm leading-6 text-muted-foreground">Our team will call you shortly to confirm delivery. Your sweets will leave our counter fresh.</p>
         <div className="mt-6 rounded-2xl bg-muted p-4 text-left text-xs space-y-2">
           <div className="flex justify-between"><span>Order reference</span><b className="font-mono-ui">{orderRef.id}</b></div>
+          <div className="flex justify-between gap-3"><span>Delivery address</span><b className="text-right">{formatDeliveryAddress(orderRef.address, orderRef.deliveryAreaName)}</b></div>
           <div className="flex justify-between"><span>Payment</span><b>{orderRef.paymentMethod === 'razorpay' ? 'Paid online' : 'Cash on delivery'}</b></div>
           <div className="flex justify-between"><span>Items</span><b>{orderRef.items.reduce((s, l) => s + l.quantity, 0)} packs</b></div>
           <div className="flex justify-between border-t border-border pt-2"><span>Order total</span><b>{money(orderRef.subtotal)}</b></div>
@@ -2747,8 +3029,29 @@ function Checkout({ pricing, minimumOrderValue, cart, onClose, onDone, onOrderCr
             <input id="customer-phone" required={!orderRef} disabled={Boolean(orderRef)} type="tel" pattern="[0-9]{10}" className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-60" placeholder="10 digit mobile number" data-testid="input-customer-phone" />
           </div>
           <div>
+            <label className="mb-2 block text-xs font-bold uppercase tracking-wider" htmlFor="checkout-delivery-area">Delivery Area <span className="text-destructive">*</span></label>
+            <DeliveryAreaPicker
+              id="checkout-delivery-area"
+              areas={deliveryAreas}
+              value={deliveryAreaId}
+              required
+              disabled={deliveryAreasLoading || Boolean(deliveryAreasError) || deliveryAreas.length === 0}
+              onChange={area => setDeliveryAreaId(area?.id ?? '')}
+            />
+            {deliveryAreasLoading ? (
+              <p className="mt-1.5 text-xs text-muted-foreground">Loading serviceable areas…</p>
+            ) : deliveryAreasError ? (
+              <p role="alert" className="mt-1.5 text-xs font-semibold text-destructive">{deliveryAreasError}</p>
+            ) : deliveryAreas.length === 0 ? (
+              <p role="status" className="mt-1.5 text-xs font-semibold text-amber-800">No serviceable areas are configured yet. Please contact the store.</p>
+            ) : (
+              <p className="mt-1.5 text-xs text-muted-foreground">Required. Choose a serviceable area before placing your order.</p>
+            )}
+          </div>
+          <div>
             <label className="mb-2 block text-xs font-bold uppercase tracking-wider" htmlFor="customer-address">Delivery address</label>
-            <textarea id="customer-address" required={!orderRef} disabled={Boolean(orderRef)} rows={3} className="w-full resize-none rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-60" placeholder="House number, street, landmark, Sirsa" data-testid="input-customer-address" />
+              <textarea id="customer-address" required={!orderRef} disabled={Boolean(orderRef)} rows={3} onChange={event => setFreeTextAddress(event.target.value)} className="w-full resize-none rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-60" placeholder="House number, street, landmark, Sirsa" data-testid="input-customer-address" />
+              {deliveryAreaId && <p className="mt-1.5 break-words text-xs text-muted-foreground"><span className="font-semibold">Complete address:</span> {formatDeliveryAddress(freeTextAddress, selectedDeliveryAreaName)}</p>}
           </div>
           <div>
             <label className="mb-2 block text-xs font-bold uppercase tracking-wider" htmlFor="delivery-date">Preferred delivery date</label>
@@ -2787,7 +3090,7 @@ function Checkout({ pricing, minimumOrderValue, cart, onClose, onDone, onOrderCr
           {onlineNote && <p className="rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-900">{onlineNote}</p>}
           {submitError && <p className="text-center text-xs font-semibold text-destructive">{submitError}</p>}
           {paymentUncertain && <p className="text-center text-xs text-muted-foreground">No new order has been created. Check My Orders or refresh this order status before attempting payment again.</p>}
-          <button type="submit" disabled={submitting || (!orderRef && (pricing.itemsSubtotal < minimumOrderValue || availabilityLoading || (paymentMethod === 'cod' ? !codAvailable : !razorpayAvailable)))} className="flex w-full items-center justify-center gap-2 rounded-full bg-secondary py-4 text-sm font-bold text-secondary-foreground disabled:cursor-not-allowed disabled:opacity-60" data-testid="button-place-order">
+          <button type="submit" disabled={submitting || (!orderRef && (pricing.itemsSubtotal < minimumOrderValue || availabilityLoading || deliveryAreasLoading || Boolean(deliveryAreasError) || deliveryAreas.length === 0 || (paymentMethod === 'cod' ? !codAvailable : !razorpayAvailable)))} className="flex w-full items-center justify-center gap-2 rounded-full bg-secondary py-4 text-sm font-bold text-secondary-foreground disabled:cursor-not-allowed disabled:opacity-60" data-testid="button-place-order">
             {submitting ? <><Loader2 className="size-4 animate-spin" /> {paymentMethod === 'razorpay' ? 'Checking secure payment…' : 'Saving order…'}</> : orderRef?.paymentMethod === 'razorpay' ? <>Check order & retry payment <ArrowRight className="size-4" /></> : !codAvailable && !razorpayAvailable ? <>Ordering temporarily unavailable</> : paymentMethod === 'razorpay' ? <>Continue to secure payment <ShieldCheck className="size-4" /></> : <>Place COD order <Check className="size-4" /></>}
           </button>
           {orderRef?.paymentMethod === 'razorpay' && orderRef.paymentStatus !== 'paid' && orderRef.paymentStatus !== 'refunded' && <div className="rounded-xl border border-amber-300 bg-amber-50 p-4">
@@ -2903,37 +3206,102 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
   const [orderAlert, setOrderAlert] = useState<{ orders: OrderRecord[] } | null>(null);
   const previousOrderIds = useRef<Set<string> | null>(null);
   const soundEnabledRef = useRef(true);
+  const orderSoundContextRef = useRef<AudioContext | null>(null);
 
   useEffect(() => {
     soundEnabledRef.current = soundEnabled;
   }, [soundEnabled]);
 
+  const getOrderSoundContext = () => {
+    try {
+      if (!window.AudioContext) return null;
+      if (!orderSoundContextRef.current || orderSoundContextRef.current.state === 'closed') {
+        orderSoundContextRef.current = new window.AudioContext();
+      }
+      return orderSoundContextRef.current;
+    } catch {
+      return null;
+    }
+  };
+
+  const playOrderChime = (context: AudioContext) => {
+    [659.25, 783.99, 987.77].forEach((frequency, index) => {
+      const start = context.currentTime + index * 0.16;
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(frequency, start);
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(0.22, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.62);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start(start);
+      oscillator.stop(start + 0.64);
+    });
+  };
+
+  const speakNewOrder = () => {
+    try {
+      if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') return false;
+      const synthesis = window.speechSynthesis;
+      synthesis.cancel();
+      const announcement = new SpeechSynthesisUtterance('New order received');
+      announcement.lang = 'en-IN';
+      announcement.rate = 0.95;
+      announcement.volume = 1;
+      synthesis.resume();
+      synthesis.speak(announcement);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const testOrderSound = () => {
+    if (speakNewOrder()) return;
+    const context = getOrderSoundContext();
+    if (!context) return;
+    try {
+      const ready = context.state === 'running' ? Promise.resolve() : context.resume();
+      void ready.then(() => {
+        if (context.state === 'running') playOrderChime(context);
+      }).catch(() => {});
+    } catch {
+      // Audio may be unavailable or blocked by the browser.
+    }
+  };
+
   const playOrderAlert = () => {
     if (!soundEnabledRef.current) return;
-    try {
-      const context = new AudioContext();
-      const soundBuzz = () => {
-        [0, 0.32, 0.64].forEach(offset => {
-          const start = context.currentTime + offset;
-          const oscillator = context.createOscillator();
-          const gain = context.createGain();
-          oscillator.type = 'square';
-          oscillator.frequency.setValueAtTime(520, start);
-          oscillator.frequency.linearRampToValueAtTime(680, start + 0.2);
-          gain.gain.setValueAtTime(0.0001, start);
-          gain.gain.exponentialRampToValueAtTime(0.34, start + 0.015);
-          gain.gain.setValueAtTime(0.34, start + 0.16);
-          gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.23);
-          oscillator.connect(gain);
-          gain.connect(context.destination);
-          oscillator.start(start);
-          oscillator.stop(start + 0.24);
-        });
-        window.setTimeout(() => void context.close(), 1200);
-      };
-      if (context.state === 'suspended') void context.resume().then(soundBuzz);
-      else soundBuzz();
-    } catch { /* notification sound can be blocked until the first click */ }
+    if (speakNewOrder()) return;
+    const context = getOrderSoundContext();
+    if (!context) return;
+    const playIfRunning = () => {
+      if (soundEnabledRef.current && context.state === 'running') playOrderChime(context);
+    };
+    if (context.state === 'running') playIfRunning();
+    else {
+      try {
+        void context.resume().then(playIfRunning).catch(() => {});
+      } catch {
+        // The header test button can unlock playback after browser autoplay blocks it.
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (!orderAlert) return;
+    const repeatTimer = window.setInterval(playOrderAlert, 20_000);
+    return () => window.clearInterval(repeatTimer);
+  }, [orderAlert]);
+
+  const acknowledgeOrderAlert = () => {
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    const context = orderSoundContextRef.current;
+    if (context?.state === 'running') void context.suspend().catch(() => {});
+    setOrderAlert(null);
+    setNewOrderCount(0);
   };
 
   const fetchAll = async () => {
@@ -3000,14 +3368,22 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
   useEffect(() => {
     fetchAll();
     const refreshTimer = window.setInterval(fetchAll, 15_000);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void fetchAll();
+    };
+    document.addEventListener('visibilitychange', refreshWhenVisible);
     window.addEventListener('aggarwal-order-created', fetchAll);
     window.addEventListener('aggarwal-customer-updated', fetchAll);
     window.addEventListener('aggarwal-settings-updated', fetchAll);
     return () => {
       window.clearInterval(refreshTimer);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
       window.removeEventListener('aggarwal-order-created', fetchAll);
       window.removeEventListener('aggarwal-customer-updated', fetchAll);
       window.removeEventListener('aggarwal-settings-updated', fetchAll);
+      const context = orderSoundContextRef.current;
+      if (context && context.state !== 'closed') void context.close().catch(() => {});
+      orderSoundContextRef.current = null;
     };
   }, []);
 
@@ -3066,6 +3442,7 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
     { key: 'dashboard',  icon: LayoutDashboard, label: 'Dashboard' },
     { key: 'products',   icon: Package,         label: 'Products' },
     { key: 'categories', icon: LayoutList,      label: 'Categories' },
+    { key: 'delivery-areas', icon: MapPin,      label: 'Delivery Areas' },
     { key: 'orders',     icon: ShoppingBag,     label: 'Orders' },
     { key: 'payments',   icon: Banknote,        label: 'Payments' },
     { key: 'other-records', icon: FileSpreadsheet, label: 'Other records' },
@@ -3107,7 +3484,7 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
             <button
               type="button"
               autoFocus
-              onClick={() => { setOrderAlert(null); setNewOrderCount(0); }}
+              onClick={acknowledgeOrderAlert}
               className="mt-6 w-full rounded-full bg-red-600 py-3.5 text-sm font-bold text-white hover:bg-red-700"
               data-testid="button-acknowledge-new-order"
             >
@@ -3151,7 +3528,7 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
               <Menu className="size-4" />
             </button>
             <div>
-              <h1 className="font-display text-lg capitalize text-primary-foreground">{section === 'other-records' ? 'Other records' : section}</h1>
+              <h1 className="font-display text-lg capitalize text-primary-foreground">{section === 'other-records' ? 'Other records' : section === 'delivery-areas' ? 'Delivery Area Master' : section}</h1>
               <p className="hidden text-xs text-primary-foreground/45 sm:block">Welcome back, {adminUser.name ?? adminUser.email}</p>
             </div>
           </div>
@@ -3170,6 +3547,17 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
             </button>
             <button onClick={() => setSoundEnabled(value => !value)} title={soundEnabled ? 'Mute order sound' : 'Enable order sound'} className="grid size-9 place-items-center rounded-full border border-primary-foreground/20 text-primary-foreground/70 hover:bg-primary-foreground/10">
               {soundEnabled ? <Volume2 className="size-4" /> : <VolumeX className="size-4" />}
+            </button>
+            <button
+              type="button"
+              onClick={testOrderSound}
+              title="Test order sound and enable background playback"
+              aria-label="Test order sound"
+              data-testid="button-test-order-sound"
+              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-full border border-primary-foreground/20 px-2.5 text-primary-foreground/70 hover:bg-primary-foreground/10"
+            >
+              <Play className="size-3.5" />
+              <span className="hidden text-xs font-semibold lg:inline">Test sound</span>
             </button>
             <button onClick={refreshAll} title="Refresh data" className="grid size-9 place-items-center rounded-full border border-primary-foreground/20 text-primary-foreground/60 hover:bg-primary-foreground/10 hover:text-primary-foreground">
               <RefreshCw className="size-4" />
@@ -3236,6 +3624,7 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
           {section === 'other-records' && <AdminSectionOtherRecords orders={orders} payments={paymentRecords} loading={dataLoading} paymentLoadError={paymentLoadError} />}
           {section === 'customers'  && <AdminSectionCustomers customers={customers} />}
           {section === 'categories' && <AdminSectionCategories onRefresh={fetchAll} />}
+          {section === 'delivery-areas' && <AdminSectionDeliveryAreas />}
           {section === 'blog'       && <AdminSectionBlog      posts={blogPosts} onRefresh={fetchAll} />}
           {section === 'coupons'   && <AdminSectionCoupons   coupons={coupons} onRefresh={fetchAll} />}
           {section === 'reviews'   && <AdminSectionReviews   reviews={adminReviews} catalog={catalog} onRefresh={fetchAll} />}
@@ -3283,8 +3672,8 @@ function AdminOrderDetailsPanel({ order, customer }: { order: OrderRecord; custo
 
       <div>
         <p className="mb-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">Delivery address</p>
-        <p className="text-sm">{order.address || customer?.address || 'Address not provided'}</p>
-        {customer?.address && customer.address !== order.address && (
+        <p className="text-sm">{formatDeliveryAddress(order.address, order.deliveryAreaName) || customer?.address || 'Address not provided'}</p>
+        {customer?.address && customer.address !== formatDeliveryAddress(order.address, order.deliveryAreaName) && (
           <p className="mt-1 text-xs text-muted-foreground">Customer profile address: {customer.address}</p>
         )}
       </div>
@@ -3339,6 +3728,7 @@ function AdminOrderDetailsPanel({ order, customer }: { order: OrderRecord; custo
           </div>
         </div>
       )}
+      <OrderBillDownloadButton order={order} />
     </div>
   );
 }
@@ -3707,11 +4097,45 @@ function AdminSectionDashboard({ catalog, orders, customers, onNavigate }: {
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
   const totalRevenue = orders.filter(order => order.paymentMethod !== 'razorpay' || order.paymentStatus === 'paid').reduce((s, o) => s + o.subtotal, 0);
   const activeOrders = orders.filter(o => o.status !== 'Delivered').length;
+  const topSellingProducts = useMemo(() => {
+    const productSales = new Map<string, {
+      id: string; name: string; category: string; image: string; unitsSold: number;
+    }>();
+
+    for (const order of orders) {
+      if (order.paymentStatus !== 'paid') continue;
+      for (const line of order.items) {
+        const product = line?.product;
+        const name = typeof product?.name === 'string' ? product.name.trim() : '';
+        const id = typeof product?.id === 'string' ? product.id.trim() : '';
+        const key = id || name;
+        const quantity = Number(line?.quantity);
+        if (!key || !name || !Number.isInteger(quantity) || quantity < 1) continue;
+
+        const existing = productSales.get(key);
+        if (existing) {
+          existing.unitsSold += quantity;
+        } else {
+          productSales.set(key, {
+            id: key,
+            name,
+            category: typeof product.category === 'string' ? product.category : '',
+            image: typeof product.image === 'string' ? product.image : '',
+            unitsSold: quantity,
+          });
+        }
+      }
+    }
+
+    return [...productSales.values()]
+      .sort((a, b) => b.unitsSold - a.unitsSold || a.name.localeCompare(b.name))
+      .slice(0, 10);
+  }, [orders]);
 
   const stats = [
     { label: 'Total orders',  value: String(orders.length),    sub: `${activeOrders} active`,      icon: ShoppingBag, accent: 'bg-blue-500' },
     { label: 'Revenue',       value: money(totalRevenue),      sub: 'All time',                    icon: Banknote,    accent: 'bg-emerald-500' },
-    { label: 'Products',      value: String(catalog.length),   sub: 'In catalogue',                icon: Package,     accent: 'bg-amber-500' },
+    { label: 'Total products', value: String(catalog.length),   sub: 'Saved in your store',         icon: Package,     accent: 'bg-amber-500' },
     { label: 'Customers',     value: String(customers.length), sub: 'Registered',                  icon: Users,       accent: 'bg-purple-500' },
   ];
 
@@ -3730,7 +4154,7 @@ function AdminSectionDashboard({ catalog, orders, customers, onNavigate }: {
         ))}
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[1.5fr_.5fr]">
+      <div className="grid gap-6 lg:grid-cols-[1.2fr_.8fr]">
         {/* Recent orders */}
         <div className="rounded-2xl border border-border bg-background shadow-sm">
           <div className="flex items-center justify-between border-b border-border px-5 py-4">
@@ -3781,23 +4205,39 @@ function AdminSectionDashboard({ catalog, orders, customers, onNavigate }: {
           )}
         </div>
 
-        {/* Top products */}
+        {/* Best-selling products */}
         <div className="rounded-2xl border border-border bg-background shadow-sm">
           <div className="border-b border-border px-5 py-4">
-            <h3 className="font-semibold">Catalogue</h3>
+            <h3 className="font-semibold">Top Trending Products</h3>
+            <p className="mt-1 text-xs text-muted-foreground">All time · Ranked by units sold from paid orders</p>
           </div>
-          <div className="divide-y divide-border">
-            {catalog.slice(0, 6).map(p => (
-              <div key={p.id} className="flex items-center gap-3 px-5 py-3">
-                <img src={p.image} className="size-9 rounded-xl object-cover" alt={p.name} />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold">{p.name}</p>
-                  <p className="text-xs text-muted-foreground">{p.category}</p>
-                </div>
-                <p className="text-sm font-bold">{money(p.price)}</p>
-              </div>
-            ))}
-          </div>
+          {topSellingProducts.length === 0 ? (
+            <div className="px-5 py-10 text-center">
+              <TrendingUp className="mx-auto size-7 text-muted-foreground/40" />
+              <p className="mt-2 text-sm text-muted-foreground">No paid product sales yet.</p>
+            </div>
+          ) : (
+            <ol className="divide-y divide-border">
+              {topSellingProducts.map((product, index) => (
+                <li key={product.id} className="flex items-center gap-3 px-4 py-2.5">
+                  <span className="grid size-7 shrink-0 place-items-center rounded-full bg-muted text-xs font-bold text-muted-foreground">
+                    {index + 1}
+                  </span>
+                  {product.image && <img src={product.image} className="size-9 shrink-0 rounded-lg object-cover" alt={product.name} />}
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold">{product.name}</p>
+                    {product.category && <p className="truncate text-xs text-muted-foreground">{product.category}</p>}
+                  </div>
+                  <p className="shrink-0 text-right text-sm font-bold">
+                    {product.unitsSold.toLocaleString()}
+                    <span className="ml-1 text-xs font-normal text-muted-foreground">
+                      unit{product.unitsSold === 1 ? '' : 's'}
+                    </span>
+                  </p>
+                </li>
+              ))}
+            </ol>
+          )}
           <div className="border-t border-border px-5 py-3">
             <button onClick={() => onNavigate('products')} className="text-xs font-bold text-secondary hover:underline">Manage products →</button>
           </div>
@@ -4171,7 +4611,7 @@ function AdminSectionOrders({ orders, loading, onStatusChange }: {
     }));
     return {
       orderId: order.id, date: order.date, status: order.status, customer: order.customerName ?? '',
-      email: order.customerEmail ?? '', phone: order.phone, address: order.address,
+      email: order.customerEmail ?? '', phone: order.phone, address: formatDeliveryAddress(order.address, order.deliveryAreaName),
       paymentMethod: order.paymentMethod ?? 'cod', paymentStatus: order.paymentStatus ?? 'pending',
       quantity: items.reduce((sum, item) => sum + item.quantity, 0),
       lineTotal: items.reduce((sum, item) => sum + item.lineTotal, 0),
@@ -4274,7 +4714,7 @@ function AdminSectionOrders({ orders, loading, onStatusChange }: {
     (filter === 'All' || o.status === filter) &&
     (search === '' ||
       o.id.toLowerCase().includes(search.toLowerCase()) ||
-      o.address.toLowerCase().includes(search.toLowerCase()) ||
+      formatDeliveryAddress(o.address, o.deliveryAreaName).toLowerCase().includes(search.toLowerCase()) ||
       o.phone.includes(search) ||
       o.customerName?.toLowerCase().includes(search.toLowerCase()) ||
       o.customerEmail?.toLowerCase().includes(search.toLowerCase()))
@@ -4321,7 +4761,7 @@ function AdminSectionOrders({ orders, loading, onStatusChange }: {
             <p className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-muted-foreground"><TrendingUp className="size-3.5" /> Revenue by category</p>
             <div className="space-y-2">{categoryReport.length ? categoryReport.map(item => {
               const max = Math.max(...categoryReport.map(value => value.revenue), 1);
-              return <div key={item.category}><div className="mb-1 flex justify-between text-xs"><span>{item.category}</span><b>{money(item.revenue)}</b></div><div className="h-2 rounded-full bg-muted"><div className="h-2 rounded-full bg-secondary" style={{ width: `${Math.max(3, (item.revenue / max) * 100)}%` }} /></div></div>;
+              return <div key={item.category}><div className="mb-1 flex justify-between text-xs"><span>{item.category}</span><b>{money(item.revenue)}</b></div><div className="h-2 rounded-full bg-muted"><div className="h-2 rounded-full bg-blue-500" style={{ width: `${Math.max(3, (item.revenue / max) * 100)}%` }} /></div></div>;
             }) : <p className="text-xs text-muted-foreground">No category data for this range.</p>}</div>
           </div>
           <div className="rounded-xl border border-border p-4">
@@ -4400,7 +4840,7 @@ function AdminSectionOrders({ orders, loading, onStatusChange }: {
                 </div>
                 <div>
                   <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Delivery address</p>
-                  <p className="break-words text-sm">{order.address || 'Address not provided'}</p>
+                  <p className="break-words text-sm">{formatDeliveryAddress(order.address, order.deliveryAreaName) || 'Address not provided'}</p>
                 </div>
                 <div className="md:col-span-2">
                   <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Items ordered</p>
@@ -4425,7 +4865,7 @@ function AdminSectionOrders({ orders, loading, onStatusChange }: {
                   </div>
                   <div>
                     <p className="mb-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">Delivery address</p>
-                    <p className="text-sm">{order.address}</p>
+                    <p className="text-sm">{formatDeliveryAddress(order.address, order.deliveryAreaName)}</p>
                   </div>
                   {(order.receiverName || order.deliveryContact || order.deliveryRemarks) && (
                     <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-950">
@@ -4470,6 +4910,7 @@ function AdminSectionOrders({ orders, loading, onStatusChange }: {
                       </div>
                     </div>
                   )}
+                  <OrderBillDownloadButton order={order} />
                 </div>
               )}
             </div>
@@ -4612,6 +5053,180 @@ function AdminSectionCustomers({ customers }: { customers: CustomerRecord[] }) {
         </div>
       </div>
       <p className="text-xs text-muted-foreground">{filtered.length} customer{filtered.length !== 1 ? 's' : ''}</p>
+    </div>
+  );
+}
+
+// ─── Admin · Delivery Area Master ─────────────────────────────────────────────
+function AdminSectionDeliveryAreas() {
+  const [areas, setAreas] = useState<DeliveryArea[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [name, setName] = useState('');
+  const [active, setActive] = useState(true);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  const loadAreas = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const response = await fetch(`${API}/delivery-areas/admin`, { credentials: 'include', cache: 'no-store' });
+      const data = await response.json().catch(() => []);
+      if (!response.ok || !Array.isArray(data)) {
+        throw new Error(typeof data?.error === 'string' ? data.error : 'Delivery Areas could not be loaded.');
+      }
+      setAreas(data as DeliveryArea[]);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : 'Delivery Areas could not be loaded.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { void loadAreas(); }, []);
+
+  const resetForm = () => {
+    setName('');
+    setActive(true);
+    setEditingId(null);
+  };
+
+  const saveArea = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setError('');
+    setSuccess('');
+    setSaving(true);
+    try {
+      const response = await fetch(`${API}/delivery-areas${editingId ? `/${encodeURIComponent(editingId)}` : ''}`, {
+        method: editingId ? 'PUT' : 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, active }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(typeof result.error === 'string' ? result.error : 'Could not save this Delivery Area.');
+      resetForm();
+      setSuccess(editingId ? 'Delivery Area updated.' : 'Delivery Area added.');
+      await loadAreas();
+      window.dispatchEvent(new Event('aggarwal-delivery-areas-updated'));
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Could not save this Delivery Area.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleArea = async (area: DeliveryArea) => {
+    setError('');
+    setSuccess('');
+    try {
+      const response = await fetch(`${API}/delivery-areas/${encodeURIComponent(area.id)}`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: !area.active }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(typeof result.error === 'string' ? result.error : 'Could not update this Delivery Area.');
+      setSuccess(area.active ? 'Area deactivated; it is no longer available at checkout.' : 'Area activated and available at checkout.');
+      await loadAreas();
+      window.dispatchEvent(new Event('aggarwal-delivery-areas-updated'));
+    } catch (toggleError) {
+      setError(toggleError instanceof Error ? toggleError.message : 'Could not update this Delivery Area.');
+    }
+  };
+
+  const deleteArea = async (area: DeliveryArea) => {
+    if (!window.confirm(`Delete "${area.name}"? Existing orders keep their saved area; areas used by orders must be deactivated instead.`)) return;
+    setError('');
+    setSuccess('');
+    try {
+      const response = await fetch(`${API}/delivery-areas/${encodeURIComponent(area.id)}`, {
+        method: 'DELETE', credentials: 'include',
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(typeof result.error === 'string' ? result.error : 'Could not delete this Delivery Area.');
+      if (editingId === area.id) resetForm();
+      setSuccess('Delivery Area deleted.');
+      await loadAreas();
+      window.dispatchEvent(new Event('aggarwal-delivery-areas-updated'));
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : 'Could not delete this Delivery Area.');
+    }
+  };
+
+  return (
+    <div className="mx-auto max-w-4xl space-y-5">
+      <div className="rounded-2xl border border-border bg-background p-5 shadow-sm sm:p-6">
+        <div className="flex items-start gap-3">
+          <div className="grid size-11 shrink-0 place-items-center rounded-xl bg-secondary/10 text-secondary"><MapPin className="size-5" /></div>
+          <div>
+            <h2 className="font-display text-2xl">Delivery Area Master</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Manage the serviceable areas customers can select during checkout. Only active areas appear in the searchable checkout list.</p>
+          </div>
+        </div>
+        <form onSubmit={saveArea} className="mt-5 grid gap-3 rounded-xl border border-border bg-muted/30 p-4 sm:grid-cols-[1fr_auto_auto] sm:items-end">
+          <div>
+            <label htmlFor="delivery-area-name" className="mb-1.5 block text-xs font-bold uppercase tracking-wider">{editingId ? 'Edit area name' : 'New area name'}</label>
+            <input
+              id="delivery-area-name"
+              required
+              maxLength={120}
+              value={name}
+              onChange={event => setName(event.target.value)}
+              placeholder="Enter a serviceable area name"
+              className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+            />
+          </div>
+          <label className="flex items-center gap-2 rounded-xl border border-border bg-background px-3 py-3 text-sm">
+            <input type="checkbox" checked={active} onChange={event => setActive(event.target.checked)} className="accent-primary" />
+            Active
+          </label>
+          <div className="flex gap-2">
+            <button type="submit" disabled={saving || !name.trim()} className="inline-flex items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-xs font-bold text-primary-foreground disabled:opacity-60">
+              {saving ? <><Loader2 className="size-4 animate-spin" /> Saving…</> : editingId ? 'Save changes' : 'Add area'}
+            </button>
+            {editingId && <button type="button" onClick={resetForm} className="rounded-full border border-border px-4 py-3 text-xs font-bold hover:bg-muted">Cancel</button>}
+          </div>
+        </form>
+        {error && <p role="alert" className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</p>}
+        {success && <p role="status" className="mt-4 rounded-xl bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">{success}</p>}
+      </div>
+
+      <div className="overflow-hidden rounded-2xl border border-border bg-background shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-5 py-4">
+          <div><h3 className="font-semibold">Configured areas</h3><p className="mt-1 text-xs text-muted-foreground">{areas.filter(area => area.active).length} active · {areas.length} total</p></div>
+          <button type="button" onClick={() => void loadAreas()} disabled={loading} className="inline-flex items-center gap-2 rounded-full border border-border px-3 py-2 text-xs font-bold hover:bg-muted disabled:opacity-60"><RefreshCw className={`size-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh</button>
+        </div>
+        {loading ? (
+          <p className="px-5 py-8 text-center text-sm text-muted-foreground">Loading Delivery Areas…</p>
+        ) : areas.length === 0 ? (
+          <div className="px-5 py-12 text-center">
+            <MapPin className="mx-auto size-8 text-muted-foreground/40" />
+            <p className="mt-3 font-semibold">No areas configured</p>
+            <p className="mt-1 text-sm text-muted-foreground">Add each serviceable area here before customers can place delivery orders.</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {areas.map(area => (
+              <div key={area.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className={`grid size-9 shrink-0 place-items-center rounded-full ${area.active ? 'bg-emerald-100 text-emerald-800' : 'bg-muted text-muted-foreground'}`}><MapPin className="size-4" /></div>
+                  <div className="min-w-0"><p className="truncate text-sm font-semibold">{area.name}</p><p className={`mt-0.5 text-[11px] font-bold ${area.active ? 'text-emerald-700' : 'text-muted-foreground'}`}>{area.active ? 'Active · selectable at checkout' : 'Inactive · not selectable'}</p></div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button type="button" onClick={() => { setEditingId(area.id); setName(area.name); setActive(area.active); setError(''); setSuccess(''); }} className="rounded-full border border-border px-3 py-2 text-xs font-bold hover:bg-muted">Edit</button>
+                  <button type="button" onClick={() => void toggleArea(area)} className={`rounded-full px-3 py-2 text-xs font-bold ${area.active ? 'border border-amber-300 text-amber-800 hover:bg-amber-50' : 'border border-emerald-300 text-emerald-800 hover:bg-emerald-50'}`}>{area.active ? 'Deactivate' : 'Activate'}</button>
+                  <button type="button" onClick={() => void deleteArea(area)} className="rounded-full border border-destructive/40 px-3 py-2 text-xs font-bold text-destructive hover:bg-destructive/5">Delete</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <p className="text-xs text-muted-foreground">Area names are saved with orders as snapshots. Renaming or deactivating an area will not change existing order addresses.</p>
     </div>
   );
 }
@@ -6050,10 +6665,53 @@ function AccountPage({ user, wishlist, orders, catalog, onAuthOpen, onLogout, on
     try { return localStorage.getItem('aggarwal-saved-address') ?? ''; } catch { return ''; }
   });
   const [addrSaved, setAddrSaved] = useState(false);
+  const [deliveryAreas, setDeliveryAreas] = useState<DeliveryArea[]>([]);
+  const [deliveryAreasLoading, setDeliveryAreasLoading] = useState(true);
+  const [deliveryAreasError, setDeliveryAreasError] = useState('');
+  const [deliveryAreaId, setDeliveryAreaId] = useState(() => {
+    try { return localStorage.getItem('aggarwal-saved-delivery-area-id') ?? ''; } catch { return ''; }
+  });
+  const [addressSaving, setAddressSaving] = useState(false);
+  const [addressError, setAddressError] = useState('');
 
   useEffect(() => {
     setName(user?.name ?? '');
   }, [user?.email, user?.name]);
+
+  useEffect(() => {
+    let active = true;
+    if (!user) {
+      setDeliveryAreasLoading(false);
+      return;
+    }
+    void Promise.all([
+      apiFetchDeliveryAreas(),
+      fetch(`${API}/customers/me`, { credentials: 'include', cache: 'no-store' }).then(async response => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(typeof data.error === 'string' ? data.error : 'Saved address could not be loaded.');
+        return data as { deliveryAddress?: unknown; deliveryAreaId?: unknown; deliveryAreaName?: unknown };
+      }),
+    ]).then(([areas, customer]) => {
+      if (!active) return;
+      setDeliveryAreas(areas);
+      if (typeof customer.deliveryAddress === 'string') {
+        setAddress(customer.deliveryAddress);
+        try { localStorage.setItem('aggarwal-saved-address', customer.deliveryAddress); } catch { /* optional local copy */ }
+      }
+      if (typeof customer.deliveryAreaId === 'string') {
+        setDeliveryAreaId(customer.deliveryAreaId);
+        try {
+          localStorage.setItem('aggarwal-saved-delivery-area-id', customer.deliveryAreaId);
+          if (typeof customer.deliveryAreaName === 'string') localStorage.setItem('aggarwal-saved-delivery-area-name', customer.deliveryAreaName);
+        } catch { /* optional local copy */ }
+      }
+    }).catch(error => {
+      if (active) setDeliveryAreasError(error instanceof Error ? error.message : 'Saved delivery details could not be loaded.');
+    }).finally(() => {
+      if (active) setDeliveryAreasLoading(false);
+    });
+    return () => { active = false; };
+  }, [user?.email]);
 
   const loadPayments = async () => {
     setPaymentsLoading(true); setPaymentsError('');
@@ -6183,10 +6841,11 @@ function AccountPage({ user, wishlist, orders, catalog, onAuthOpen, onLogout, on
                         {order.address && (
                           <p className="mt-3 flex break-words text-xs text-muted-foreground">
                             <MapPin className="mt-0.5 size-3.5 shrink-0" />
-                            <span className="ml-1.5">{order.address}</span>
+                            <span className="ml-1.5">{formatDeliveryAddress(order.address, order.deliveryAreaName)}</span>
                           </p>
                         )}
                         <CustomerPaymentRetry order={order} />
+                        <OrderBillDownloadButton order={order} />
                         {order.status === 'Delivered' && (order.receiverName || order.deliveryContact || order.deliveryRemarks) && (
                           <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-emerald-950">
                             <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-700">
@@ -6334,11 +6993,63 @@ function AccountPage({ user, wishlist, orders, catalog, onAuthOpen, onLogout, on
                       placeholder="House number, street, landmark, city, PIN"
                       className="w-full resize-none rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-ring" />
                   </div>
+                  <div>
+                    <label className="mb-2 block text-xs font-bold uppercase tracking-wider" htmlFor="saved-delivery-area">Delivery Area <span className="text-destructive">*</span></label>
+                    <DeliveryAreaPicker
+                      id="saved-delivery-area"
+                      areas={deliveryAreas}
+                      value={deliveryAreaId}
+                      required
+                      disabled={deliveryAreasLoading || Boolean(deliveryAreasError) || deliveryAreas.length === 0}
+                      onChange={area => { setDeliveryAreaId(area?.id ?? ''); setAddrSaved(false); }}
+                    />
+                    {deliveryAreasLoading ? (
+                      <p className="mt-1.5 text-xs text-muted-foreground">Loading serviceable areas…</p>
+                    ) : deliveryAreasError ? (
+                      <p role="alert" className="mt-1.5 text-xs font-semibold text-destructive">{deliveryAreasError}</p>
+                    ) : deliveryAreas.length === 0 ? (
+                      <p role="status" className="mt-1.5 text-xs text-muted-foreground">No serviceable areas are configured yet.</p>
+                    ) : (
+                      <p className="mt-1.5 text-xs text-muted-foreground">Required to save the complete delivery address.</p>
+                    )}
+                    {deliveryAreaId && <p className="mt-1.5 break-words text-xs text-muted-foreground"><span className="font-semibold">Complete address:</span> {formatDeliveryAddress(address, deliveryAreas.find(area => area.id === deliveryAreaId)?.name)}</p>}
+                  </div>
+                  {addressError && <p role="alert" className="text-xs font-semibold text-destructive">{addressError}</p>}
                   <button
-                    onClick={() => { localStorage.setItem('aggarwal-saved-address', address); setAddrSaved(true); }}
-                    className="flex items-center gap-2 rounded-full bg-primary px-5 py-3 text-xs font-bold text-primary-foreground"
+                    onClick={async () => {
+                      setAddressError('');
+                      setAddrSaved(false);
+                      if (!address.trim() || !deliveryAreas.some(area => area.id === deliveryAreaId)) {
+                        setAddressError('Enter a delivery address and select a serviceable Delivery Area.');
+                        return;
+                      }
+                      setAddressSaving(true);
+                      try {
+                        const response = await fetch(`${API}/customers/me/address`, {
+                          method: 'PUT',
+                          credentials: 'include',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ address, deliveryAreaId }),
+                        });
+                        const result = await response.json().catch(() => ({}));
+                        if (!response.ok) throw new Error(typeof result.error === 'string' ? result.error : 'Could not save the delivery address.');
+                        const selectedArea = deliveryAreas.find(area => area.id === result.deliveryAreaId);
+                        try {
+                          localStorage.setItem('aggarwal-saved-address', address);
+                          localStorage.setItem('aggarwal-saved-delivery-area-id', deliveryAreaId);
+                          if (selectedArea) localStorage.setItem('aggarwal-saved-delivery-area-name', selectedArea.name);
+                        } catch { /* server copy is saved even if browser storage is unavailable */ }
+                        setAddrSaved(true);
+                      } catch (error) {
+                        setAddressError(error instanceof Error ? error.message : 'Could not save the delivery address.');
+                      } finally {
+                        setAddressSaving(false);
+                      }
+                    }}
+                    disabled={addressSaving || deliveryAreasLoading || deliveryAreas.length === 0}
+                    className="flex items-center gap-2 rounded-full bg-primary px-5 py-3 text-xs font-bold text-primary-foreground disabled:opacity-60"
                     data-testid="button-save-address">
-                    {addrSaved ? <><Check className="size-4" /> Saved!</> : <><MapPin className="size-4" /> Save address</>}
+                    {addressSaving ? <><Loader2 className="size-4 animate-spin" /> Saving…</> : addrSaved ? <><Check className="size-4" /> Saved!</> : <><MapPin className="size-4" /> Save address</>}
                   </button>
                 </div>
               </div>
@@ -6583,6 +7294,7 @@ function SharedShell({ children }: { children: ShellRenderProp }) {
           <CartDrawer
             cart={cart} subtotal={subtotal} updateQty={updateQty}
             onClose={() => setCartOpen(false)}
+            onBrowseProducts={() => { setCartOpen(false); shellNavigate('/shop'); }}
             onCheckout={handleProceedCheckout}
             user={user}
             onAuthOpen={() => { setCartOpen(false); setPendingCheckout(true); setAuthOpen(true); }}

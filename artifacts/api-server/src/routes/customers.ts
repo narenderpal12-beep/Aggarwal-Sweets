@@ -1,9 +1,11 @@
 import { Router } from "express";
-import { db, customersTable, ordersTable } from "@workspace/db";
+import { db, customersTable, deliveryAreasTable, ordersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { requireSession } from "../lib/session.js";
+import { formatDeliveryAddress } from "../lib/delivery-address.js";
 
 const router = Router();
+class DeliveryAreaUnavailableError extends Error {}
 
 router.get("/customers", async (_req, res) => {
   if (!requireSession(_req, res, "admin")) return;
@@ -26,7 +28,7 @@ router.get("/customers", async (_req, res) => {
     const orderDate = Date.parse(order.date);
     if (!current.lastOrderAt || (!Number.isNaN(orderDate) && orderDate >= currentDate)) current.lastOrderAt = order.date;
     current.phone = current.phone ?? order.phone;
-    current.address = current.address ?? order.address;
+     current.address = current.address ?? formatDeliveryAddress(order.address, order.deliveryAreaName);
     byEmail.set(emailKey, current);
   }
   res.json(customers.map(customer => ({
@@ -35,7 +37,8 @@ router.get("/customers", async (_req, res) => {
     totalSpent: byEmail.get(customer.email.trim().toLowerCase())?.totalSpent ?? 0,
     lastOrderAt: byEmail.get(customer.email.trim().toLowerCase())?.lastOrderAt,
     phone: byEmail.get(customer.email.trim().toLowerCase())?.phone,
-    address: byEmail.get(customer.email.trim().toLowerCase())?.address,
+    address: byEmail.get(customer.email.trim().toLowerCase())?.address ??
+      formatDeliveryAddress(customer.deliveryAddress, customer.deliveryAreaName),
   })));
 });
 
@@ -47,7 +50,47 @@ router.get("/customers/me", async (req, res) => {
     .from(customersTable)
     .where(eq(customersTable.email, session.email))
     .limit(1);
-  res.json(customer ?? { email: session.email, name: null });
+  res.json(customer ?? { email: session.email, name: null, deliveryAddress: null, deliveryAreaId: null, deliveryAreaName: null });
+});
+
+router.put("/customers/me/address", async (req, res) => {
+  const session = requireSession(req, res, "customer");
+  if (!session) return;
+  const address = typeof req.body?.address === "string" ? req.body.address.trim() : "";
+  const deliveryAreaId = typeof req.body?.deliveryAreaId === "string" ? req.body.deliveryAreaId.trim() : "";
+  if (!address || address.length > 1000 || !deliveryAreaId) {
+    res.status(400).json({ error: "Enter a delivery address and select a Delivery Area." });
+    return;
+  }
+  let customer;
+  try {
+    customer = await db.transaction(async transaction => {
+      const [area] = await transaction.select().from(deliveryAreasTable)
+        .where(eq(deliveryAreasTable.id, deliveryAreaId)).limit(1).for("share");
+      if (!area || !area.active) throw new DeliveryAreaUnavailableError();
+      const [savedCustomer] = await transaction.insert(customersTable).values({
+        email: session.email,
+        deliveryAddress: address,
+        deliveryAreaId: area.id,
+        deliveryAreaName: area.name,
+      }).onConflictDoUpdate({
+        target: customersTable.email,
+        set: {
+          deliveryAddress: address,
+          deliveryAreaId: area.id,
+          deliveryAreaName: area.name,
+        },
+      }).returning();
+      return savedCustomer;
+    });
+  } catch (error) {
+    if (error instanceof DeliveryAreaUnavailableError) {
+      res.status(400).json({ error: "Select an active Delivery Area." });
+      return;
+    }
+    throw error;
+  }
+  res.json(customer);
 });
 
 // Upsert — idempotent registration on first login

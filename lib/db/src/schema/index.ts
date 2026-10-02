@@ -19,11 +19,20 @@ export const productsTable = pgTable("products", {
 });
 
 // ─── Orders ───────────────────────────────────────────────────────────────────
+export const deliveryAreasTable = pgTable("delivery_areas", {
+  id:        text("id").primaryKey(),
+  name:      text("name").notNull(),
+  active:    boolean("active").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+});
+
 export const ordersTable = pgTable("orders", {
   id:            text("id").primaryKey(),
   date:          text("date").notNull(),
   phone:         text("phone").notNull(),
   address:       text("address").notNull(),
+  deliveryAreaId: text("delivery_area_id").references(() => deliveryAreasTable.id, { onDelete: "restrict" }),
+  deliveryAreaName: text("delivery_area_name"),
   subtotal:      integer("subtotal").notNull(),
   status:        text("status").notNull().default("Confirmed"),
   customerEmail: text("customer_email"),
@@ -58,9 +67,12 @@ export const orderPaymentsTable = pgTable("order_payments", {
 
 // ─── Customers ────────────────────────────────────────────────────────────────
 export const customersTable = pgTable("customers", {
-  email:    text("email").primaryKey(),
-  name:     text("name"),
-  joinedAt: timestamp("joined_at").notNull().defaultNow(),
+  email:             text("email").primaryKey(),
+  name:              text("name"),
+  deliveryAddress:   text("delivery_address"),
+  deliveryAreaId:    text("delivery_area_id").references(() => deliveryAreasTable.id, { onDelete: "set null" }),
+  deliveryAreaName:  text("delivery_area_name"),
+  joinedAt:          timestamp("joined_at").notNull().defaultNow(),
 });
 
 // ─── Admin Settings ───────────────────────────────────────────────────────────

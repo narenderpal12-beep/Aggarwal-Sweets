@@ -1,13 +1,24 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
-import { db, ordersTable, orderPaymentsTable, productsTable, adminSettingsTable, couponCodesTable } from "@workspace/db";
+import { db, ordersTable, orderPaymentsTable, productsTable, adminSettingsTable, couponCodesTable, deliveryAreasTable } from "@workspace/db";
 import { and, desc, eq, like, ne, sql } from "drizzle-orm";
 import { sendDeliveredOrderEmail, sendOrderEmails } from "../lib/email.js";
 import { createGatewayOrder, razorpayAvailable, razorpayKeyId, type GatewayOrder } from "../lib/razorpay.js";
-import { generateOrderReportPdf, type OrderReportPdfData, type OrderReportPdfRow } from "../lib/order-bill.js";
+import {
+  generateOrderBillPdf, generateOrderReportPdf,
+  type BillItem, type BillOrder, type BillPricing, type OrderReportPdfData, type OrderReportPdfRow,
+} from "../lib/order-bill.js";
 import { requireSession } from "../lib/session.js";
+import { formatDeliveryAddress } from "../lib/delivery-address.js";
 
 const router = Router();
+
+class DeliveryAreaUnavailableError extends Error {}
+
+function normalizeVariantLabel(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
 
 type Window = { day: number; start: string; end: string };
 function isAvailable(active: boolean | undefined, schedule: Window[] | null | undefined, now: Date) {
@@ -84,6 +95,80 @@ function isOrderReportPdfData(value: unknown): value is OrderReportPdfData {
   });
 }
 
+function isBillableOrder(order: {
+  status: string;
+  paymentMethod: string | null;
+  paymentStatus: string | null;
+}) {
+  const confirmedStatus = ["Confirmed", "Packing", "Out for delivery", "Delivered"].includes(order.status);
+  if (!confirmedStatus) return false;
+  if (order.paymentMethod === "razorpay") {
+    return order.paymentStatus === "paid" || order.paymentStatus === "refunded";
+  }
+  return order.paymentMethod === "cod" &&
+    ["pending", "paid", "refunded"].includes(order.paymentStatus ?? "pending");
+}
+
+router.get("/orders/:id/bill.pdf", async (req, res) => {
+  const session = requireSession(req, res);
+  if (!session) return;
+  const [order] = await db
+    .select()
+    .from(ordersTable)
+    .where(eq(ordersTable.id, req.params.id))
+    .limit(1);
+  if (!order || (session.role !== "admin" &&
+      (session.role !== "customer" || order.customerEmail?.toLowerCase() !== session.email.toLowerCase()))) {
+    res.status(404).json({ error: "Order not found." });
+    return;
+  }
+  if (!isBillableOrder({
+    status: order.status,
+    paymentMethod: order.paymentMethod,
+    paymentStatus: order.paymentStatus,
+  })) {
+    res.status(409).json({ error: "A bill is available only for confirmed orders with a valid payment state." });
+    return;
+  }
+  if (!Array.isArray(order.items) || !order.pricing || !order.address || !order.date || !order.phone) {
+    res.status(409).json({ error: "This order does not have the saved details required to generate a bill." });
+    return;
+  }
+
+  try {
+    const [logoSetting] = await db
+      .select({ value: adminSettingsTable.value })
+      .from(adminSettingsTable)
+      .where(eq(adminSettingsTable.key, "logo_url"))
+      .limit(1);
+    const bill: BillOrder = {
+      id: order.id,
+      date: order.date,
+      customerName: order.customerName ?? undefined,
+      customerEmail: order.customerEmail ?? undefined,
+      phone: order.phone,
+      address: formatDeliveryAddress(order.address, order.deliveryAreaName),
+      items: order.items as BillItem[],
+      pricing: order.pricing as BillPricing,
+      subtotal: Number(order.subtotal),
+      paymentMethod: order.paymentMethod === "razorpay" ? "razorpay" : "cod",
+      paymentReference: order.paidPaymentId ?? undefined,
+      paymentStatus: order.paymentStatus ?? "pending",
+      orderStatus: order.status,
+    };
+    const pdf = await generateOrderBillPdf(bill, logoSetting?.value);
+    const safeOrderId = order.id.replace(/[^a-z0-9_-]/gi, "-");
+    res.status(200)
+      .setHeader("Content-Type", "application/pdf")
+      .setHeader("Content-Disposition", `attachment; filename="Aggarwal-Sweets-Bill-${safeOrderId}.pdf"`)
+      .setHeader("Cache-Control", "no-store")
+      .send(pdf);
+  } catch (error) {
+    console.error("Could not generate order bill PDF:", error);
+    res.status(500).json({ error: "The bill could not be generated. Please try again." });
+  }
+});
+
 router.post("/orders/report.pdf", async (req, res) => {
   if (!requireSession(req, res, "admin")) return;
   if (!isOrderReportPdfData(req.body)) {
@@ -126,6 +211,7 @@ router.post("/orders", async (req, res) => {
   const session = requireSession(req, res, "customer");
   if (!session) return;
   const { phone, address, items, customerName } = req.body;
+  const deliveryAreaId = typeof req.body.deliveryAreaId === "string" ? req.body.deliveryAreaId.trim() : "";
   const paymentMethod = req.body.paymentMethod ?? "cod";
   if (paymentMethod !== "cod" && paymentMethod !== "razorpay") {
     res.status(400).json({ error: "Choose a valid payment method." });
@@ -139,6 +225,16 @@ router.post("/orders", async (req, res) => {
       typeof address !== "string" || !address.trim() || address.length > 1000 ||
       typeof customerName !== "string" || !customerName.trim() || customerName.length > 120) {
     res.status(400).json({ error: "Please enter your name, 10-digit phone number and delivery address." });
+    return;
+  }
+  if (!deliveryAreaId || deliveryAreaId.length > 120) {
+    res.status(400).json({ error: "Please select a Delivery Area before placing your order." });
+    return;
+  }
+  const [selectedDeliveryArea] = await db.select().from(deliveryAreasTable)
+    .where(eq(deliveryAreasTable.id, deliveryAreaId)).limit(1);
+  if (!selectedDeliveryArea || !selectedDeliveryArea.active) {
+    res.status(400).json({ error: "That Delivery Area is no longer serviceable. Please select an active area." });
     return;
   }
   if (!Array.isArray(items) || !items.length || items.some((line: any) =>
@@ -211,10 +307,20 @@ router.post("/orders", async (req, res) => {
       res.status(409).json({ error: "An item in your box is no longer available. Please remove it and try again." });
       return;
     }
-    const variant = product.variants.find(item =>
-      item.material === line.variant?.material && item.weight === line.variant?.weight);
+    const requestedMaterial = normalizeVariantLabel(line.variant?.material);
+    const requestedWeight = normalizeVariantLabel(line.variant?.weight);
+    const variant = requestedMaterial && requestedWeight
+      ? product.variants.find(item =>
+          normalizeVariantLabel(item.material) === requestedMaterial &&
+          normalizeVariantLabel(item.weight) === requestedWeight)
+      : undefined;
     if (!variant) {
-      res.status(409).json({ error: `${product.name} has changed. Please refresh your cart and try again.` });
+      const selectedVariant = [line.variant?.material, line.variant?.weight]
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        .join(" · ");
+      res.status(409).json({
+        error: `${product.name}${selectedVariant ? ` (${selectedVariant})` : ""} has changed. Remove it from your cart and add the current option before trying again.`,
+      });
       return;
     }
     const category = categories.find(item => item.label?.toLowerCase() === product.category.toLowerCase());
@@ -285,7 +391,12 @@ router.post("/orders", async (req, res) => {
     }
   }
   const { dateKey, timeKey } = getIndiaOrderTimestamp(now);
-  const order = await db.transaction(async transaction => {
+  let order: typeof ordersTable.$inferSelect;
+  try {
+    order = await db.transaction(async transaction => {
+    const [currentDeliveryArea] = await transaction.select().from(deliveryAreasTable)
+      .where(eq(deliveryAreasTable.id, deliveryAreaId)).limit(1).for("share");
+    if (!currentDeliveryArea || !currentDeliveryArea.active) throw new DeliveryAreaUnavailableError();
     await transaction.execute(sql`select pg_advisory_xact_lock(hashtext(${dateKey}))`);
     const todaysOrders = await transaction
       .select({ id: ordersTable.id })
@@ -302,6 +413,8 @@ router.post("/orders", async (req, res) => {
       date: now.toISOString(),
       phone: phone.trim(),
       address: address.trim(),
+      deliveryAreaId: currentDeliveryArea.id,
+      deliveryAreaName: currentDeliveryArea.name,
       subtotal: pricing.total,
       items: verifiedItems,
       pricing,
@@ -321,7 +434,14 @@ router.post("/orders", async (req, res) => {
       gatewayOrderId: gatewayOrder?.id ?? null,
     });
     return savedOrder;
-  });
+    });
+  } catch (error) {
+    if (error instanceof DeliveryAreaUnavailableError) {
+      res.status(409).json({ error: "That Delivery Area is no longer serviceable. Please select an active area." });
+      return;
+    }
+    throw error;
+  }
   if (gatewayOrder) {
     res.status(201).json({
       order,
@@ -342,7 +462,7 @@ router.post("/orders", async (req, res) => {
     id: order.id,
     date: order.date,
     phone: order.phone,
-    address: order.address,
+    address: formatDeliveryAddress(order.address, order.deliveryAreaName),
     subtotal: order.subtotal,
     pricing,
     status: order.status,
@@ -436,7 +556,7 @@ router.put("/orders/:id/status", async (req, res) => {
       id: updated.id,
       date: updated.date,
       phone: updated.phone,
-      address: updated.address,
+      address: formatDeliveryAddress(updated.address, updated.deliveryAreaName),
       subtotal: updated.subtotal,
       status: updated.status,
       customerEmail: updated.customerEmail ?? undefined,
