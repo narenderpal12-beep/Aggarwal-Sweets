@@ -5,9 +5,10 @@ import { and, desc, eq, like, ne, sql } from "drizzle-orm";
 import { sendDeliveredOrderEmail, sendOrderEmails } from "../lib/email.js";
 import { createGatewayOrder, razorpayAvailable, razorpayKeyId, type GatewayOrder } from "../lib/razorpay.js";
 import {
-  generateOrderBillPdf, generateOrderReportPdf,
+  generateThermalOrderBillPdf, generateOrderReportPdf,
   type BillItem, type BillOrder, type BillPricing, type OrderReportPdfData, type OrderReportPdfRow,
 } from "../lib/order-bill.js";
+import { generateA4OrderBillPdf } from "../lib/order-bill-a4.js";
 import { requireSession } from "../lib/session.js";
 import { formatDeliveryAddress } from "../lib/delivery-address.js";
 
@@ -156,7 +157,9 @@ router.get("/orders/:id/bill.pdf", async (req, res) => {
       paymentStatus: order.paymentStatus ?? "pending",
       orderStatus: order.status,
     };
-    const pdf = await generateOrderBillPdf(bill, logoSetting?.value);
+    const pdf = session.role === "admin"
+      ? await generateThermalOrderBillPdf(bill)
+      : await generateA4OrderBillPdf(bill, logoSetting?.value);
     const safeOrderId = order.id.replace(/[^a-z0-9_-]/gi, "-");
     res.status(200)
       .setHeader("Content-Type", "application/pdf")
