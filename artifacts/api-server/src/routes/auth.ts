@@ -1,10 +1,8 @@
 import { Router } from "express";
-import { db, adminSettingsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
 import { clearSession, createSession, requireSession } from "../lib/session.js";
+import { verifyAdminPassword } from "../lib/admin-password.js";
 
 const ADMIN_EMAIL   = "admin@aggarwalsweets.in";
-const DEFAULT_ADMIN_PASSWORD = "Admin@123";
 
 const router = Router();
 
@@ -22,17 +20,9 @@ router.post("/auth/admin", async (req, res) => {
     return;
   }
 
-  const [row] = await db
-    .select()
-    .from(adminSettingsTable)
-    .where(eq(adminSettingsTable.key, "admin_password"))
-    .limit(1);
-
-  const storedPassword = row?.value ?? DEFAULT_ADMIN_PASSWORD;
-
   if (
     email.toLowerCase() === ADMIN_EMAIL &&
-    password === storedPassword
+    await verifyAdminPassword(password)
   ) {
     createSession(res, ADMIN_EMAIL, "admin");
     res.json({ success: true });

@@ -31,7 +31,7 @@ function cookieValue(req: Request, name: string) {
 
 export function createSession(res: Response, email: string, role: SessionRole) {
   const payload: SessionPayload = {
-    email: email.toLowerCase(),
+    email: email.trim().toLowerCase(),
     role,
     expiresAt: Date.now() + SESSION_DURATION_MS,
   };

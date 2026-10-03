@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
-import { db, ordersTable, orderPaymentsTable, productsTable, adminSettingsTable, couponCodesTable, deliveryAreasTable } from "@workspace/db";
+import { db, ordersTable, orderPaymentsTable, productsTable, adminSettingsTable, couponCodesTable, deliveryAreasTable, customersTable } from "@workspace/db";
 import { and, desc, eq, like, ne, sql } from "drizzle-orm";
 import { sendDeliveredOrderEmail, sendOrderEmails } from "../lib/email.js";
 import { createGatewayOrder, razorpayAvailable, razorpayKeyId, type GatewayOrder } from "../lib/razorpay.js";
@@ -11,6 +11,7 @@ import {
 import { generateA4OrderBillPdf } from "../lib/order-bill-a4.js";
 import { requireSession } from "../lib/session.js";
 import { formatDeliveryAddress } from "../lib/delivery-address.js";
+import { verifyAdminPassword } from "../lib/admin-password.js";
 
 const router = Router();
 
@@ -427,6 +428,13 @@ router.post("/orders", async (req, res) => {
       paymentStatus: "pending",
       customerEmail: session.email,
     }).returning();
+    await transaction.insert(customersTable).values({
+      email: session.email,
+      name: customerName.trim(),
+    }).onConflictDoUpdate({
+      target: customersTable.email,
+      set: { name: customerName.trim() },
+    });
     await transaction.insert(orderPaymentsTable).values({
       id: randomUUID(),
       orderId: id,
@@ -583,6 +591,35 @@ router.delete("/orders/clear", async (_req, res) => {
   }
   await db.delete(ordersTable);
   res.json({ cleared: true });
+});
+
+router.post("/orders/reset-history", async (req, res) => {
+  if (!requireSession(req, res, "admin")) return;
+
+  const body = req.body as { password?: unknown; confirmation?: unknown } | null;
+  if (body?.confirmation !== "RESET") {
+    res.status(400).json({ error: 'Type "RESET" to confirm this action.' });
+    return;
+  }
+  if (typeof body.password !== "string" || body.password.length === 0) {
+    res.status(400).json({ error: "Admin password is required." });
+    return;
+  }
+  if (!(await verifyAdminPassword(body.password))) {
+    res.status(401).json({ error: "Admin password is incorrect." });
+    return;
+  }
+
+  try {
+    await db.transaction(async transaction => {
+      await transaction.delete(orderPaymentsTable);
+      await transaction.delete(ordersTable);
+    });
+    res.json({ cleared: true });
+  } catch (error) {
+    console.error("Failed to reset order and payment history:", error);
+    res.status(500).json({ error: "Order and payment history could not be reset." });
+  }
 });
 
 export default router;

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { db } from "@workspace/db";
+import { db, customersTable } from "@workspace/db";
 import { otpCodesTable } from "@workspace/db/schema";
 import { eq, and, gt } from "drizzle-orm";
 import { sendOtpEmail, isEmailConfigured } from "../lib/email.js";
@@ -12,12 +12,13 @@ const ADMIN_EMAIL = "admin@aggarwalsweets.in";
 
 // POST /auth/otp/send — generate & email a 6-digit OTP
 router.post("/auth/otp/send", async (req, res) => {
-  const { email } = req.body as { email?: string };
+  const submittedEmail = (req.body as { email?: unknown } | null)?.email;
+  const email = typeof submittedEmail === "string" ? submittedEmail.trim().toLowerCase() : "";
   if (!email || !email.includes("@")) {
     res.status(400).json({ error: "Valid email required" });
     return;
   }
-  if (email.toLowerCase() === ADMIN_EMAIL) {
+  if (email === ADMIN_EMAIL) {
     res.status(400).json({ error: "Use admin login for this account" });
     return;
   }
@@ -27,7 +28,7 @@ router.post("/auth/otp/send", async (req, res) => {
 
   await db.insert(otpCodesTable).values({
     id: randomUUID(),
-    email: email.toLowerCase(),
+    email,
     code,
     expiresAt,
   });
@@ -52,7 +53,8 @@ router.post("/auth/otp/send", async (req, res) => {
 
 // POST /auth/otp/verify — verify code, return success + email
 router.post("/auth/otp/verify", async (req, res) => {
-  const { email, code } = req.body as { email?: string; code?: string };
+  const { email: submittedEmail, code } = req.body as { email?: string; code?: string };
+  const email = typeof submittedEmail === "string" ? submittedEmail.trim().toLowerCase() : "";
   if (!email || !code) {
     res.status(400).json({ error: "Email and code required" });
     return;
@@ -64,7 +66,7 @@ router.post("/auth/otp/verify", async (req, res) => {
     .from(otpCodesTable)
     .where(
       and(
-        eq(otpCodesTable.email, email.toLowerCase()),
+        eq(otpCodesTable.email, email),
         eq(otpCodesTable.code, code.trim()),
         eq(otpCodesTable.used, false),
         gt(otpCodesTable.expiresAt, now)
@@ -77,11 +79,16 @@ router.post("/auth/otp/verify", async (req, res) => {
     return;
   }
 
-  // Mark consumed
-  await db
-    .update(otpCodesTable)
-    .set({ used: true })
-    .where(eq(otpCodesTable.id, record.id));
+  await db.transaction(async transaction => {
+    await transaction
+      .update(otpCodesTable)
+      .set({ used: true })
+      .where(eq(otpCodesTable.id, record.id));
+    await transaction
+      .insert(customersTable)
+      .values({ email: record.email })
+      .onConflictDoNothing();
+  });
 
   createSession(res, record.email, "customer");
   res.json({ success: true, email: record.email });

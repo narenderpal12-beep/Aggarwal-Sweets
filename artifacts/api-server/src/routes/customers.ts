@@ -7,6 +7,10 @@ import { formatDeliveryAddress } from "../lib/delivery-address.js";
 const router = Router();
 class DeliveryAreaUnavailableError extends Error {}
 
+function normalizeEmail(email: string | null | undefined) {
+  return email?.trim().toLowerCase() ?? "";
+}
+
 router.get("/customers", async (_req, res) => {
   if (!requireSession(_req, res, "admin")) return;
   res.set("Cache-Control", "no-store");
@@ -17,10 +21,31 @@ router.get("/customers", async (_req, res) => {
     .orderBy(customersTable.joinedAt),
     db.select().from(ordersTable),
   ]);
+  const customersByEmail = new Map<string, (typeof customers)[number]>();
+  for (const customer of customers) {
+    const emailKey = normalizeEmail(customer.email);
+    if (!emailKey) continue;
+    const existing = customersByEmail.get(emailKey);
+    if (!existing) {
+      customersByEmail.set(emailKey, { ...customer, email: emailKey });
+      continue;
+    }
+    customersByEmail.set(emailKey, {
+      ...existing,
+      email: emailKey,
+      name: existing.name?.trim() ? existing.name : customer.name?.trim() ? customer.name : null,
+      deliveryAddress: existing.deliveryAddress?.trim() ? existing.deliveryAddress : customer.deliveryAddress,
+      deliveryAreaId: existing.deliveryAreaId ?? customer.deliveryAreaId,
+      deliveryAreaName: existing.deliveryAreaName?.trim() ? existing.deliveryAreaName : customer.deliveryAreaName,
+      joinedAt: existing.joinedAt.getTime() <= customer.joinedAt.getTime() ? existing.joinedAt : customer.joinedAt,
+    });
+  }
+
   const byEmail = new Map<string, { orderCount: number; totalSpent: number; lastOrderAt?: string; phone?: string; address?: string }>();
+  const firstOrderByEmail = new Map<string, (typeof orders)[number]>();
   for (const order of orders) {
-    if (!order.customerEmail) continue;
-    const emailKey = order.customerEmail.trim().toLowerCase();
+    const emailKey = normalizeEmail(order.customerEmail);
+    if (!emailKey) continue;
     const current = byEmail.get(emailKey) ?? { orderCount: 0, totalSpent: 0 };
     current.orderCount += 1;
     current.totalSpent += Number(order.subtotal) || 0;
@@ -28,18 +53,43 @@ router.get("/customers", async (_req, res) => {
     const orderDate = Date.parse(order.date);
     if (!current.lastOrderAt || (!Number.isNaN(orderDate) && orderDate >= currentDate)) current.lastOrderAt = order.date;
     current.phone = current.phone ?? order.phone;
-     current.address = current.address ?? formatDeliveryAddress(order.address, order.deliveryAreaName);
+    current.address = current.address ?? formatDeliveryAddress(order.address, order.deliveryAreaName);
     byEmail.set(emailKey, current);
+
+    const firstOrder = firstOrderByEmail.get(emailKey);
+    if (!firstOrder || Date.parse(order.date) < Date.parse(firstOrder.date)) {
+      firstOrderByEmail.set(emailKey, order);
+    }
   }
-  res.json(customers.map(customer => ({
-    ...customer,
-    orderCount: byEmail.get(customer.email.trim().toLowerCase())?.orderCount ?? 0,
-    totalSpent: byEmail.get(customer.email.trim().toLowerCase())?.totalSpent ?? 0,
-    lastOrderAt: byEmail.get(customer.email.trim().toLowerCase())?.lastOrderAt,
-    phone: byEmail.get(customer.email.trim().toLowerCase())?.phone,
-    address: byEmail.get(customer.email.trim().toLowerCase())?.address ??
-      formatDeliveryAddress(customer.deliveryAddress, customer.deliveryAreaName),
-  })));
+
+  for (const [emailKey, order] of firstOrderByEmail) {
+    if (customersByEmail.has(emailKey)) continue;
+    const orderDate = new Date(order.date);
+    customersByEmail.set(emailKey, {
+      email: emailKey,
+      name: order.customerName,
+      deliveryAddress: null,
+      deliveryAreaId: null,
+      deliveryAreaName: null,
+      joinedAt: Number.isNaN(orderDate.getTime()) ? new Date() : orderDate,
+    });
+  }
+
+  const customerList = [...customersByEmail.entries()].map(([emailKey, customer]) => {
+    const orderStats = byEmail.get(emailKey);
+    return {
+      ...customer,
+      email: emailKey,
+      joinedAt: customer.joinedAt.toISOString(),
+      orderCount: orderStats?.orderCount ?? 0,
+      totalSpent: orderStats?.totalSpent ?? 0,
+      lastOrderAt: orderStats?.lastOrderAt,
+      phone: orderStats?.phone,
+      address: orderStats?.address ?? formatDeliveryAddress(customer.deliveryAddress, customer.deliveryAreaName),
+    };
+  }).sort((first, second) => Date.parse(first.joinedAt) - Date.parse(second.joinedAt));
+
+  res.json(customerList);
 });
 
 router.get("/customers/me", async (req, res) => {
@@ -69,7 +119,7 @@ router.put("/customers/me/address", async (req, res) => {
         .where(eq(deliveryAreasTable.id, deliveryAreaId)).limit(1).for("share");
       if (!area || !area.active) throw new DeliveryAreaUnavailableError();
       const [savedCustomer] = await transaction.insert(customersTable).values({
-        email: session.email,
+        email: normalizeEmail(session.email),
         deliveryAddress: address,
         deliveryAreaId: area.id,
         deliveryAreaName: area.name,
@@ -98,7 +148,7 @@ router.post("/customers", async (req, res) => {
   const session = requireSession(req, res, "customer");
   if (!session) return;
   const name = typeof req.body?.name === "string" ? req.body.name : undefined;
-  const email = session.email;
+  const email = normalizeEmail(session.email);
   const normalizedName = name?.trim();
   const query = db
     .insert(customersTable)

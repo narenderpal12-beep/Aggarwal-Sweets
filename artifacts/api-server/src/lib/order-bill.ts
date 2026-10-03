@@ -104,16 +104,18 @@ export async function generateThermalOrderBillPdf(order: BillOrder, logoDataUrl?
   const orderTime = `${datePart("hour")}:${datePart("minute")}`;
   const tokenMatch = order.id.match(/-(\d{5})$/);
   const tokenNumber = tokenMatch ? String(Number(tokenMatch[1])) : "—";
-  const pageWidth = 80 * 72 / 25.4;
-  const pageContentWidth = pageWidth - 24;
+  const millimetersToPoints = (millimeters: number) => millimeters * 72 / 25.4;
+  const pageWidth = millimetersToPoints(80);
+  const pageContentWidth = millimetersToPoints(72);
+  const horizontalMargin = (pageWidth - pageContentWidth) / 2;
   const amount = (value: number) => value.toLocaleString("en-IN", {
     minimumFractionDigits: 2, maximumFractionDigits: 2,
   });
   const headerCell = (text: string, alignment: "left" | "center" | "right" = "left"): TableCell => ({
-    text, bold: true, color: "#111111", fontSize: 7, alignment, margin: [2, 3, 2, 3],
+    text, bold: true, color: "#111111", fontSize: 7, alignment, margin: [2, 1, 2, 1],
   });
   const detailCell = (text: string, alignment: "left" | "center" | "right" = "left"): TableCell => ({
-    text, fontSize: 7.5, alignment, margin: [2, 2, 2, 2],
+    text, fontSize: 7.5, alignment, margin: [2, 1, 2, 1],
   });
   const itemRows: TableCell[][] = [
     [
@@ -130,7 +132,7 @@ export async function generateThermalOrderBillPdf(order: BillOrder, logoDataUrl?
           { text: item.product.name, fontSize: 8 },
           { text: `(${item.variant.weight})`, fontSize: 7 },
         ],
-        fontSize: 7.5, margin: [2, 3, 2, 3],
+        fontSize: 7.5, margin: [2, 1, 2, 1],
       },
       detailCell(String(item.quantity), "center"),
       detailCell(amount(item.variant.price), "right"),
@@ -143,22 +145,22 @@ export async function generateThermalOrderBillPdf(order: BillOrder, logoDataUrl?
       type: "line" as const, x1: 0, y1: 0, x2: pageContentWidth, y2: 0,
       lineWidth, lineColor: "#222222",
     }],
-    margin: [0, 3, 0, 3] as [number, number, number, number],
+    margin: [0, 1, 0, 1] as [number, number, number, number],
   });
 
   const document: TDocumentDefinitions = {
     pageSize: { width: pageWidth, height: "auto" },
-    pageMargins: [10, 10, 10, 10],
+    pageMargins: [horizontalMargin, 1, horizontalMargin, 3],
     info: { title: `Order bill ${order.id}`, author: "Aggarwal Sweets Sirsa" },
     defaultStyle: { font: "Roboto", fontSize: 7.5, color: "#111111" },
     content: [
       { text: "Aggarwal sweets", fontSize: 12, bold: true, italics: true, alignment: "center" },
-      { text: "Bhadra Bazar, Sirsa Contact:", fontSize: 9.5, bold: true, alignment: "center", margin: [0, 2, 0, 0] },
-      { text: "96715-00121", fontSize: 10, bold: true, alignment: "center", margin: [0, 0, 0, 3] },
+      { text: "Bhadra Bazar, Sirsa Contact:", fontSize: 9.5, bold: true, alignment: "center", margin: [0, 1, 0, 0] },
+      { text: "96715-00121", fontSize: 10, bold: true, alignment: "center", margin: [0, 0, 0, 1] },
       rule(1.2),
-      { text: `Name: ${order.customerName?.trim() || "Customer"} (M: ${order.phone})`, fontSize: 8.5, margin: [0, 1, 0, 2] },
-      { text: `Adr: ${order.address}`, fontSize: 8.5, margin: [0, 0, 0, 1] },
-      { text: "Locality: Sirsa", fontSize: 8.5, margin: [0, 0, 0, 2] },
+      { text: `Name: ${order.customerName?.trim() || "Customer"} (M: ${order.phone})`, fontSize: 8.5, margin: [0, 1, 0, 1] },
+      { text: `Adr: ${order.address}`, fontSize: 8.5, margin: [0, 0, 0, 0] },
+      { text: "Locality: Sirsa", fontSize: 8.5, margin: [0, 0, 0, 1] },
       rule(1.2),
       {
         columns: [
@@ -175,7 +177,7 @@ export async function generateThermalOrderBillPdf(order: BillOrder, logoDataUrl?
             alignment: "right",
           },
         ],
-        margin: [0, 1, 0, 1],
+        margin: [0, 0, 0, 0],
       },
       {
         columns: [
@@ -183,9 +185,9 @@ export async function generateThermalOrderBillPdf(order: BillOrder, logoDataUrl?
           { width: 62, text: "Cashier: biller", fontSize: 6.5 },
           { width: "*", text: `Bill No.: ${order.id}`, fontSize: 6.5, alignment: "right" },
         ],
-        margin: [0, 0, 0, 1],
+        margin: [0, 0, 0, 0],
       },
-      { text: `Token No.: ${tokenNumber}`, fontSize: 9, bold: true, margin: [0, 0, 0, 1] },
+      { text: `Token No.: ${tokenNumber}`, fontSize: 9, bold: true, margin: [0, 0, 0, 0] },
       {
         table: { headerRows: 1, dontBreakRows: true, widths: [16, "*", 23, 45, 50], body: itemRows },
         layout: {
@@ -194,8 +196,8 @@ export async function generateThermalOrderBillPdf(order: BillOrder, logoDataUrl?
           vLineWidth: () => 0,
           paddingLeft: () => 1,
           paddingRight: () => 1,
-          paddingTop: () => 2,
-          paddingBottom: () => 2,
+          paddingTop: () => 1,
+          paddingBottom: () => 1,
         },
       },
       {
@@ -214,21 +216,21 @@ export async function generateThermalOrderBillPdf(order: BillOrder, logoDataUrl?
           widths: ["*", 60],
           body: [
             [
-              detailCell(`GST (${order.pricing.gstPercent}%) · included`),
+              detailCell(`GST (${order.pricing.gstPercent}%)`),
               detailCell(`₹ ${amount(order.pricing.gst)}`, "right"),
             ],
             [
-              detailCell(order.pricing.deliveryWaived ? "Delivery charge (waived)" : "Delivery charge · included"),
+              detailCell(order.pricing.deliveryWaived ? "Delivery charge (waived)" : "Delivery charge"),
               detailCell(`₹ ${amount(order.pricing.deliveryCharge)}`, "right"),
             ],
           ],
         },
         layout: "noBorders",
-        margin: [0, 0, 0, 1],
+        margin: [0, 0, 0, 0],
       },
-      { text: `Grand Total  ₹ ${amount(order.pricing.total)}`, fontSize: 11, bold: true, alignment: "center", margin: [0, 1, 0, 1] },
+      { text: `Grand Total  ₹ ${amount(order.pricing.total)}`, fontSize: 11, bold: true, alignment: "center", margin: [0, 0, 0, 0] },
       rule(1.2),
-      { text: "Thanks", fontSize: 11, bold: true, alignment: "center", margin: [0, 1, 0, 0] },
+      { text: "Thanks", fontSize: 11, bold: true, alignment: "center", margin: [0, 0, 0, 0] },
     ],
   };
 

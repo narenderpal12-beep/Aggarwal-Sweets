@@ -13,7 +13,7 @@ import {
   LogOut, Eye, EyeOff, Pencil, RefreshCw, Users, Loader2,
   Tag, Percent, Upload, Palette, FileText, ImageIcon, Type, LayoutList, Facebook,
   Bell, BellRing, Play, Volume2, VolumeX, Download, CalendarDays, BarChart3, FileSpreadsheet,
-  TrendingUp, Filter, CircleDot
+  TrendingUp, Filter, CircleDot, Printer
 } from 'lucide-react';
 import NotFound from '@/pages/not-found';
 import { PrivacyPolicyPage, ReturnsCancellationPage, TermsConditionsPage } from '@/pages/policies';
@@ -37,7 +37,7 @@ type DeliveryArea = { id: string; name: string; active: boolean; sortOrder?: num
 type CartLine = { product: Product; variant: ProductVariant; quantity: number };
 type AuthUser = { email: string; name?: string; role?: 'customer' | 'admin' };
 type CustomerRecord = {
-  email: string; name?: string; joinedAt: string; phone?: string; address?: string;
+  email: string; name?: string; joinedAt?: string; phone?: string; address?: string;
   orderCount?: number; totalSpent?: number; lastOrderAt?: string;
 };
 type OrderStatus = 'Awaiting payment' | 'Payment failed' | 'Confirmed' | 'Packing' | 'Out for delivery' | 'Delivered';
@@ -592,50 +592,115 @@ function canPrintOrderBill(order: OrderRecord): boolean {
   return order.paymentMethod === 'cod' && ['pending', 'paid', 'refunded'].includes(paymentStatus);
 }
 
-function OrderBillDownloadButton({ order }: { order: OrderRecord }) {
-  const [downloading, setDownloading] = useState(false);
+async function requestOrderBillPdf(orderId: string, fallbackMessage: string): Promise<Blob> {
+  const response = await fetch(`${API}/orders/${encodeURIComponent(orderId)}/bill.pdf`, {
+    credentials: 'include',
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    const result = await response.json().catch(() => ({}));
+    throw new Error(typeof result.error === 'string' ? result.error : fallbackMessage);
+  }
+  const blob = await response.blob();
+  if (!blob.size || (blob.type && !blob.type.includes('application/pdf'))) {
+    throw new Error('The server returned an invalid PDF. Please try again.');
+  }
+  return blob;
+}
+
+function OrderBillDownloadButton({ order, showDirectPrint = false }: { order: OrderRecord; showDirectPrint?: boolean }) {
+  const [busyAction, setBusyAction] = useState<'download' | 'print' | null>(null);
   const [error, setError] = useState('');
   if (!canPrintOrderBill(order)) return null;
 
   const downloadBill = async () => {
-    setDownloading(true);
+    setBusyAction('download');
     setError('');
     try {
-      const response = await fetch(`${API}/orders/${encodeURIComponent(order.id)}/bill.pdf`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!response.ok) {
-        const result = await response.json().catch(() => ({}));
-        throw new Error(typeof result.error === 'string' ? result.error : 'The bill could not be downloaded.');
-      }
-      const blob = await response.blob();
-      if (!blob.size || (blob.type && !blob.type.includes('application/pdf'))) {
-        throw new Error('The server returned an invalid PDF. Please try again.');
-      }
+      const blob = await requestOrderBillPdf(order.id, 'The bill could not be downloaded.');
       const safeId = order.id.replace(/[^a-z0-9_-]/gi, '-');
       downloadReportFile(blob, `Aggarwal-Sweets-Bill-${safeId}.pdf`);
     } catch (downloadError) {
       setError(downloadError instanceof Error ? downloadError.message : 'The bill could not be downloaded.');
     } finally {
-      setDownloading(false);
+      setBusyAction(null);
+    }
+  };
+
+  const printBill = async () => {
+    const printWindow = window.open('about:blank', '_blank');
+    if (!printWindow) {
+      setError('Allow pop-ups for this site to open the print dialog.');
+      return;
+    }
+
+    printWindow.document.title = 'Preparing bill';
+    printWindow.document.body.textContent = 'Preparing bill for printing…';
+    setBusyAction('print');
+    setError('');
+    let printUrl: string | null = null;
+    try {
+      const blob = await requestOrderBillPdf(order.id, 'The bill could not be prepared for printing.');
+      if (printWindow.closed) throw new Error('The print window was closed before the bill was ready.');
+      printUrl = URL.createObjectURL(blob);
+      const objectUrl = printUrl;
+      const printOnLoad = () => {
+        if (printWindow.closed) return;
+        printWindow.focus();
+        window.setTimeout(() => {
+          if (printWindow.closed) return;
+          try {
+            printWindow.print();
+          } catch {
+            setError('The print dialog could not be opened. Use Download Bill instead.');
+          }
+        }, 500);
+      };
+      printWindow.addEventListener('load', printOnLoad, { once: true });
+      printWindow.location.href = objectUrl;
+
+      const cleanupInterval = window.setInterval(() => {
+        if (printWindow.closed) {
+          window.clearInterval(cleanupInterval);
+          URL.revokeObjectURL(objectUrl);
+        }
+      }, 1000);
+    } catch (printError) {
+      printWindow.close();
+      if (printUrl) URL.revokeObjectURL(printUrl);
+      setError(printError instanceof Error ? printError.message : 'The bill could not be prepared for printing.');
+    } finally {
+      setBusyAction(null);
     }
   };
 
   return (
-    <div className="mt-4">
+    <div className="mt-4 flex flex-wrap gap-2">
       <button
         type="button"
         onClick={downloadBill}
-        disabled={downloading}
-        aria-busy={downloading}
+        disabled={busyAction !== null}
+        aria-busy={busyAction === 'download'}
         className="inline-flex items-center gap-2 rounded-xl border border-secondary/30 bg-background px-4 py-2 text-xs font-bold text-secondary transition-colors hover:bg-secondary/5 disabled:cursor-wait disabled:opacity-60"
-        data-testid={`button-print-order-bill-${order.id}`}
+        data-testid={`button-download-order-bill-${order.id}`}
       >
         <Download className="size-3.5" />
-        {downloading ? 'Preparing PDF…' : 'Print Bill'}
+        {busyAction === 'download' ? 'Preparing PDF…' : 'Download Bill'}
       </button>
-      {error && <p className="mt-2 text-xs text-red-600" role="alert">{error}</p>}
+      {showDirectPrint && (
+        <button
+          type="button"
+          onClick={printBill}
+          disabled={busyAction !== null}
+          aria-busy={busyAction === 'print'}
+          className="inline-flex items-center gap-2 rounded-xl bg-secondary px-4 py-2 text-xs font-bold text-secondary-foreground transition-colors hover:opacity-90 disabled:cursor-wait disabled:opacity-60"
+          data-testid={`button-print-order-bill-${order.id}`}
+        >
+          <Printer className="size-3.5" />
+          {busyAction === 'print' ? 'Preparing print…' : 'Direct Print'}
+        </button>
+      )}
+      {error && <p className="basis-full text-xs text-red-600" role="alert">{error}</p>}
     </div>
   );
 }
@@ -781,6 +846,7 @@ async function apiTrackCustomer(user: AuthUser): Promise<boolean> {
   try {
     const response = await fetch(`${API}/customers`, {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: user.email, name: user.name }),
     });
@@ -3224,48 +3290,32 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
     }
   };
 
-  const playOrderChime = (context: AudioContext) => {
-    [659.25, 783.99, 987.77].forEach((frequency, index) => {
-      const start = context.currentTime + index * 0.16;
+  const playOrderAlertSound = (context: AudioContext) => {
+    [0, 0.32, 0.64].forEach(offset => {
+      const start = context.currentTime + offset;
       const oscillator = context.createOscillator();
-      const gain = context.createGain();
-      oscillator.type = 'sine';
-      oscillator.frequency.setValueAtTime(frequency, start);
-      gain.gain.setValueAtTime(0.0001, start);
-      gain.gain.exponentialRampToValueAtTime(0.22, start + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.62);
-      oscillator.connect(gain);
-      gain.connect(context.destination);
+      const envelope = context.createGain();
+      oscillator.type = 'square';
+      oscillator.frequency.setValueAtTime(520, start);
+      oscillator.frequency.linearRampToValueAtTime(680, start + 0.2);
+      envelope.gain.setValueAtTime(0.0001, start);
+      envelope.gain.exponentialRampToValueAtTime(0.34, start + 0.015);
+      envelope.gain.setValueAtTime(0.34, start + 0.16);
+      envelope.gain.exponentialRampToValueAtTime(0.0001, start + 0.23);
+      oscillator.connect(envelope);
+      envelope.connect(context.destination);
       oscillator.start(start);
-      oscillator.stop(start + 0.64);
+      oscillator.stop(start + 0.24);
     });
   };
 
-  const speakNewOrder = () => {
-    try {
-      if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') return false;
-      const synthesis = window.speechSynthesis;
-      synthesis.cancel();
-      const announcement = new SpeechSynthesisUtterance('New order received');
-      announcement.lang = 'en-IN';
-      announcement.rate = 0.95;
-      announcement.volume = 1;
-      synthesis.resume();
-      synthesis.speak(announcement);
-      return true;
-    } catch {
-      return false;
-    }
-  };
-
   const testOrderSound = () => {
-    if (speakNewOrder()) return;
     const context = getOrderSoundContext();
     if (!context) return;
     try {
       const ready = context.state === 'running' ? Promise.resolve() : context.resume();
       void ready.then(() => {
-        if (context.state === 'running') playOrderChime(context);
+        if (context.state === 'running') playOrderAlertSound(context);
       }).catch(() => {});
     } catch {
       // Audio may be unavailable or blocked by the browser.
@@ -3274,11 +3324,10 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
 
   const playOrderAlert = () => {
     if (!soundEnabledRef.current) return;
-    if (speakNewOrder()) return;
     const context = getOrderSoundContext();
     if (!context) return;
     const playIfRunning = () => {
-      if (soundEnabledRef.current && context.state === 'running') playOrderChime(context);
+      if (soundEnabledRef.current && context.state === 'running') playOrderAlertSound(context);
     };
     if (context.state === 'running') playIfRunning();
     else {
@@ -3297,7 +3346,6 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
   }, [orderAlert]);
 
   const acknowledgeOrderAlert = () => {
-    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     const context = orderSoundContextRef.current;
     if (context?.state === 'running') void context.suspend().catch(() => {});
     setOrderAlert(null);
@@ -3310,7 +3358,7 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
       const [p, o, c, b, coupList, s, revList, paymentList] = await Promise.all([
         fetch(`${API}/products`).then(r => r.json()),
         fetch(`${API}/orders`, { cache: 'no-store' }).then(r => r.json()),
-        fetch(`${API}/customers`, { cache: 'no-store' }).then(r => r.json()),
+        fetch(`${API}/customers`, { credentials: 'include', cache: 'no-store' }).then(r => r.json()),
         fetch(`${API}/blog`).then(r => r.json()),
         fetch(`${API}/coupons`).then(r => r.json()),
         fetch(`${API}/settings`).then(r => r.json()),
@@ -3551,8 +3599,8 @@ function AdminDashboard({ adminUser, onLogout }: { adminUser: AuthUser; onLogout
             <button
               type="button"
               onClick={testOrderSound}
-              title="Test order sound and enable background playback"
-              aria-label="Test order sound"
+              title="Test order alert sound and enable background playback"
+              aria-label="Test order alert sound"
               data-testid="button-test-order-sound"
               className="inline-flex h-9 items-center justify-center gap-1.5 rounded-full border border-primary-foreground/20 px-2.5 text-primary-foreground/70 hover:bg-primary-foreground/10"
             >
@@ -3728,7 +3776,7 @@ function AdminOrderDetailsPanel({ order, customer }: { order: OrderRecord; custo
           </div>
         </div>
       )}
-      <OrderBillDownloadButton order={order} />
+      <OrderBillDownloadButton order={order} showDirectPrint />
     </div>
   );
 }
@@ -4910,7 +4958,7 @@ function AdminSectionOrders({ orders, loading, onStatusChange }: {
                       </div>
                     </div>
                   )}
-                  <OrderBillDownloadButton order={order} />
+                  <OrderBillDownloadButton order={order} showDirectPrint />
                 </div>
               )}
             </div>
@@ -5688,6 +5736,11 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
   const [codMsg, setCodMsg] = useState('');
   const [logoMsg, setLogoMsg] = useState('');
   const [dangerMsg, setDangerMsg] = useState('');
+  const [resetHistoryOpen, setResetHistoryOpen] = useState(false);
+  const [resetHistoryPassword, setResetHistoryPassword] = useState('');
+  const [resetHistoryConfirmation, setResetHistoryConfirmation] = useState('');
+  const [resetHistoryBusy, setResetHistoryBusy] = useState(false);
+  const [resetHistoryError, setResetHistoryError] = useState('');
   // Local editable states (saved only on button click)
   const [localCats, setLocalCats] = useState<CravingCat[]>([]);
   const [catsSaved, setCatsSaved] = useState(false);
@@ -5707,6 +5760,52 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
   const defaults: Record<string, string> = { name: 'Aggarwal Sweets', address: '12, Hissar Road, Sirsa', phone: '01666234786', hours: '9:00 AM – 9:30 PM' };
   const si = { ...defaults, ...storeInfo };
   const codEnabled = storeInfo.cod_enabled !== 'false';
+
+  const openResetHistory = () => {
+    setDangerMsg('');
+    setResetHistoryPassword('');
+    setResetHistoryConfirmation('');
+    setResetHistoryError('');
+    setResetHistoryOpen(true);
+  };
+
+  const closeResetHistory = () => {
+    if (resetHistoryBusy) return;
+    setResetHistoryOpen(false);
+    setResetHistoryPassword('');
+    setResetHistoryConfirmation('');
+    setResetHistoryError('');
+  };
+
+  const submitResetHistory = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (resetHistoryConfirmation !== 'RESET') {
+      setResetHistoryError('Type RESET exactly to confirm.');
+      return;
+    }
+    setResetHistoryBusy(true);
+    setResetHistoryError('');
+    try {
+      const response = await fetch(`${API}/orders/reset-history`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: resetHistoryPassword, confirmation: resetHistoryConfirmation }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(typeof body.error === 'string' ? body.error : 'Order and payment history could not be reset.');
+
+      setResetHistoryOpen(false);
+      setResetHistoryPassword('');
+      setResetHistoryConfirmation('');
+      setDangerMsg('ok:Order and payment history reset. Products, customers, and settings were kept.');
+      window.dispatchEvent(new Event('aggarwal-order-created'));
+    } catch (error) {
+      setResetHistoryError(error instanceof Error ? error.message : 'Order and payment history could not be reset.');
+    } finally {
+      setResetHistoryBusy(false);
+    }
+  };
 
   const toggleCod = async () => {
     setCodSaving(true);
@@ -6218,22 +6317,76 @@ function AdminSectionSettings({ adminUser }: { adminUser: AuthUser }) {
                 setDangerMsg(`error:${error instanceof Error ? error.message : 'Orders could not be cleared.'}`);
               }
             } },
+            { label: 'Reset orders, payments & trending', desc: 'Permanently removes local order and payment history; Top Trending Products will reset. Products and customer records remain. Does not issue refunds.', buttonLabel: 'Reset', action: openResetHistory },
             { label: 'Clear customer list', desc: 'Removes all registered customers from DB', action: async () => { await fetch(`${API}/customers/clear`, { method: 'DELETE' }).catch(() => {}); setDangerMsg('ok:Customers cleared.'); } },
             { label: 'Reset product catalogue', desc: 'Restores the original product list', action: async () => { await fetch(`${API}/products/reset`, { method: 'POST' }).catch(() => {}); window.dispatchEvent(new Event('aggarwal-catalog-updated')); setDangerMsg('ok:Catalogue reset to defaults. Refresh to see changes.'); } },
-          ].map(({ label, desc, action }) => (
+          ].map(({ label, desc, action, buttonLabel }) => (
             <div key={label} className="flex items-center justify-between rounded-xl border border-border p-4">
               <div>
                 <p className="text-sm font-semibold">{label}</p>
                 <p className="text-xs text-muted-foreground">{desc}</p>
               </div>
               <button onClick={action} className="rounded-xl border border-red-200 px-4 py-2 text-xs font-bold text-red-500 hover:bg-red-50">
-                Clear
+                {buttonLabel ?? 'Clear'}
               </button>
             </div>
           ))}
           {dangerMsg && <p className={`rounded-xl px-4 py-2 text-xs font-bold ${msgCls(dangerMsg)}`}>{msgTxt(dangerMsg)}</p>}
         </div>
       </div>
+      {resetHistoryOpen && (
+        <div
+          className="fixed inset-0 z-[120] grid place-items-center bg-black/50 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="reset-order-history-title"
+          onKeyDown={event => { if (event.key === 'Escape') closeResetHistory(); }}
+        >
+          <form onSubmit={submitResetHistory} className="w-full max-w-lg space-y-4 rounded-2xl border border-red-200 bg-background p-6 shadow-2xl">
+            <div>
+              <h3 id="reset-order-history-title" className="text-lg font-bold text-red-700">Reset order and payment history?</h3>
+              <p className="mt-2 text-sm text-muted-foreground">
+                This permanently removes all orders and local payment records from this app, including customer order history and sales reports. It does not refund or remove payments at the payment provider. Products, customers, and settings will remain; the trending list will clear because it is calculated from paid orders.
+              </p>
+            </div>
+            <label className="block text-sm font-semibold">
+              Admin password
+              <input
+                type="password"
+                autoComplete="current-password"
+                required
+                value={resetHistoryPassword}
+                onChange={event => setResetHistoryPassword(event.target.value)}
+                className="mt-1 w-full rounded-xl border border-input bg-background px-3 py-2.5 font-normal"
+              />
+            </label>
+            <label className="block text-sm font-semibold">
+              Type RESET to confirm
+              <input
+                type="text"
+                autoComplete="off"
+                required
+                value={resetHistoryConfirmation}
+                onChange={event => setResetHistoryConfirmation(event.target.value)}
+                className="mt-1 w-full rounded-xl border border-input bg-background px-3 py-2.5 font-normal"
+              />
+            </label>
+            {resetHistoryError && <p role="alert" className="rounded-xl bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">{resetHistoryError}</p>}
+            <div className="flex justify-end gap-3 pt-1">
+              <button type="button" onClick={closeResetHistory} disabled={resetHistoryBusy} className="rounded-xl border border-border px-4 py-2.5 text-sm font-semibold disabled:opacity-60">
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={resetHistoryBusy || !resetHistoryPassword || resetHistoryConfirmation !== 'RESET'}
+                className="rounded-xl bg-red-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                {resetHistoryBusy ? 'Resetting…' : 'Reset order & payment history'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }
